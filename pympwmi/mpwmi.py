@@ -1,17 +1,13 @@
-import logging
+
 from functools import reduce
 import networkx as nx
 from networkx.algorithms.components import connected_components
 import numpy as np
-from pysmt.fnode import FNode
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 
 from pympwmi import logger
 from pympwmi.primal import PrimalGraph
-from pympwmi.utils import domains_to_intervals, find_edge_critical_points, flip_negated_literals_cnf, \
-    find_symbolic_bounds, parse_univariate_literal, to_sympy, \
-    literal_to_bounds, weight_to_lit_potentials, ordered_variables, symSymbol, \
-    SMT_SOLVER, cache_key2
+from pympwmi.utils import *
 from sympy import integrate as symbolic_integral, Poly
 from sympy import sympify
 from sympy.core.mul import Mul as symbolic_mul
@@ -33,12 +29,8 @@ class MPWMI:
     ----------
     cache : dict
         Cache for integrals, or None
-    components : list
-        The list of connected components (sets of nodes) in 'primal'
     marginals : dict
         Dictionary storing the symbolic marginals of each variable given evidence
-    potentials : dict
-        Mapping variables to the list of potentials associated with them
     primal : PrimalGraph instance
         The primal graph of 'formula'
     rand_gen : np.random.RandomState instance
@@ -74,38 +66,11 @@ class MPWMI:
         self.rand_gen = rand_gen
         self.smt_solver = smt_solver
         self.tolerance = tolerance
-        self.potentials = weight_to_lit_potentials(weight)
 
-        # flip negated literals in potentials (TODO: remove this)
+        self.primal = PrimalGraph(formula, weight)
+        #logger.debug(f"primal potentials: {nx.get_edge_attributes(self.primal.G, 'potentials')}")
+        #logger.debug(f"primal clauses: {nx.get_edge_attributes(self.primal.G, 'clauses')}")
 
-        def flip_potential_pair(lw):
-            return (flip_negated_literals_cnf(lw[0]), lw[1])
-
-        for vs, vs_potentials in self.potentials.items():
-            self.potentials[vs] = list(map(flip_potential_pair, vs_potentials))
-
-        # bivariate conditions are added to formula ###############################
-        # TODO kinda of hack, refactor asap.
-        formula_atoms = formula.get_atoms()
-        conditions = []
-        for vs in self.potentials:
-            if len(vs) == 2:
-                for lit, _ in self.potentials[vs]:
-                    if lit not in formula_atoms:
-                        conditions.append(Or(lit, Not(lit)))
-        formula = And(list(formula.args()) + conditions)
-        logging.debug("\tFinished preprocessing formula")
-        ############################################################################
-
-        self.primal = PrimalGraph(formula)
-        if not nx.is_forest(self.primal.G):
-            raise NotImplementedError("MP requires a forest-shaped primal graph")
-        logging.debug("\tCreated primal graph")
-
-        assert (all(
-            [e in self.primal.edges() for e in self.potentials if len(e) == 2]))
-
-        self.components = list(connected_components(self.primal.G))
         self.marginals = dict()
         self.cache = None
         self.cache_hit = None
@@ -130,6 +95,9 @@ class MPWMI:
             If True, integrals are cached, default: False
         """
 
+        if not nx.is_forest(self.primal.G):
+            raise NotImplementedError("MP requires a forest-shaped primal graph")
+
         if queries is None:
             queries = []
         else:
@@ -139,25 +107,21 @@ class MPWMI:
             self.cache = dict()
             self.cache_hit = [0, 0]
 
-        else:
+        elif cache is False:
             self.cache = None
 
         # send around messages, possibly accounting for 'evidence'
         self._compute_marginals(evidence=evidence)
-        logging.debug("\tMarginals computed")
 
         # compute the partition function as the product of the marginals of any node
         # for each connected component in the primal graph
+        components = list(connected_components(self.primal.G))
         Z_components = []
-        for c, comp_vars in enumerate(self.components):
+        for comp_vars in components:
             x = list(comp_vars)[0]
             full_marginal = self._get_full_marginal(x)
-            logging.debug(f"\t\t got full marginals for component {c}")
             comp_Z = self.piecewise_symbolic_integral(full_marginal, x)
-            logging.debug(f"\t\t Z_c computed by simbolic integration")
-
             Z_components.append(comp_Z)
-        logging.debug("\tCollecting partial results from components: done")
 
         query_volumes = []
         for q in queries:
@@ -176,11 +140,10 @@ class MPWMI:
                 q_marginal = self._get_msgs_intersection(
                     [self._get_full_marginal(x), q_msg]
                 )
-
                 q_vol = self.piecewise_symbolic_integral(q_marginal, x)
 
                 # account for the volume of unconnected variables
-                for i, comp_vars in enumerate(self.components):
+                for i, comp_vars in enumerate(components):
                     if x not in comp_vars:
                         q_vol *= Z_components[i]
 
@@ -190,17 +153,6 @@ class MPWMI:
 
                 # bivariate query
                 y = q_vars[1].symbol_name()
-                if (x, y) not in self.primal.edges():
-                    # TODO: a method for getting the auxiliary variable name:
-                    # aux(x:str, y:str) -> str should be offered by PrimalGraph
-                    xc = f"{x}_{y}"
-                    yc = f"{y}_{x}"
-                    if (xc, y) in self.primal.edges():
-                        x = xc
-                    elif (x, yc) in self.primal.edges():
-                        y = yc
-                    else:
-                        raise NotImplementedError("Can't answer this query")
 
                 # creates a new message using the query 'q' as evidence
                 q_marginal = self._compute_message(x, y, evidence=[q])
@@ -210,9 +162,10 @@ class MPWMI:
                                                            self.marginals[y]
                                                            if z != x])
 
-                if (y,) in self.potentials:
+                y_potentials = self.primal.nodes()[y]['potentials']
+                if len(y_potentials) > 0:
                     potential_msgs = self._parse_potentials(
-                        self.potentials[(y,)], self.primal.nodes()[y]['var']
+                        y_potentials, self.primal.nodes()[y]['var']
                     )
                     q_marginal = self._get_msgs_intersection(
                         potential_msgs + [q_marginal]
@@ -221,7 +174,7 @@ class MPWMI:
                 q_vol = self.piecewise_symbolic_integral(q_marginal, y)
 
                 # account for the volume of unconnected variables
-                for i, comp_vars in enumerate(self.components):
+                for i, comp_vars in enumerate(components):
                     if x not in comp_vars:
                         q_vol *= Z_components[i]
 
@@ -237,7 +190,7 @@ class MPWMI:
 
         if self.cache_hit is not None:
             # TODO: check if cache_hit index should be True or False
-            logging.debug("HITS: {}/{} (ratio {})".format(self.cache_hit[True],
+            logger.debug("\tHITS: {}/{} (ratio {})".format(self.cache_hit[True],
                                                           sum(self.cache_hit),
                                                           self.cache_hit[True] /
                                                           sum(self.cache_hit)))
@@ -288,14 +241,14 @@ class MPWMI:
                 parent = parents[0]
                 self._send_message(n, parent, evidence=evidence)
 
-        logging.debug("\t\tBottom-up pass done")
+        #logger.debug("\t\tBottom-up pass done")
 
         # top-down pass
         exec_order.reverse()
         for n in exec_order:
             for child in topdown.neighbors(n):
                 self._send_message(n, child, evidence=evidence)
-        logging.debug("\t\tTop-down pass done")
+        #logger.debug("\t\tTop-down pass done")
 
     def _basecase_msg(self, x):
         """
@@ -327,6 +280,7 @@ class MPWMI:
         """
         assert((x, y) in self.primal.edges())
 
+        #logger.debug("\t\t\tcompute_message ({x},{y})")
         # gather previously received messages
         if self.primal.G.degree[x] == 1:
             new_integrand = self._basecase_msg(x)
@@ -336,10 +290,11 @@ class MPWMI:
             new_integrand = self._get_msgs_intersection(aggr)
 
         # account for potentials associated with this variable
+        x_potentials = self.primal.nodes()[x]['potentials']
 
-        if (x,) in self.potentials:
+        if len(x_potentials) > 0:
             potential_msgs = self._parse_potentials(
-                self.potentials[(x,)], self.primal.nodes()[x]['var']
+                x_potentials, self.primal.nodes()[x]['var']
             )
             new_integrand = self._get_msgs_intersection(
                 potential_msgs + [new_integrand]
@@ -349,7 +304,6 @@ class MPWMI:
             evidence = []
 
         # compute the new pieces using the x-, y-, x/y-clauses in f + evidence
-
         xvar = self.primal.nodes()[x]['var']
         yvar = self.primal.nodes()[y]['var']
 
@@ -379,17 +333,20 @@ class MPWMI:
             f = And(delta_x, delta_x_y, delta_y,
                     LT(Real(lc), yvar), LT(yvar, Real(uc)))
 
-            if self.smt_solver and not is_sat(f, solver_name=self.smt_solver):
+            # we shouldn't check for the smt solver at each iteration
+            #if self.smt_solver and not is_sat(f, solver_name=self.smt_solver):
+            if not is_sat(f, solver_name=self.smt_solver):
                 continue
             pwintegral = [(ls, us, new_integrand[ip][2])
                           for ls, us, ip in find_symbolic_bounds(new_integrand,
                                                                  xvar,
                                                                  (uc + lc) / 2,
                                                                  delta_x_y)]
-            if tuple(sorted([x, y])) in self.potentials:
+            x_y_potentials = self.primal.edges()[(x, y)]['potentials']
+            if len(x_y_potentials) > 0:
                 subs = {yvar: Real((uc + lc) / 2)}
                 potential_msgs = MPWMI._parse_potentials(
-                    self.potentials[tuple(sorted([x, y]))], xvar, subs
+                    x_y_potentials, xvar, subs
                 )
                 num_pwintegral = [(simplify(substitute(l, subs)),
                                    simplify(substitute(u, subs)),
@@ -404,7 +361,7 @@ class MPWMI:
                     bds[l_num.constant_value()] = l
                     u_num = simplify(substitute(u, subs))
                     bds[u_num.constant_value()] = u
-                for lit, _ in self.potentials[tuple(sorted([x, y]))]:
+                for lit, _ in x_y_potentials:
                     k, _, _ = literal_to_bounds(lit)[xvar]
                     k_num = simplify(substitute(k, subs))
                     bds[k_num.constant_value()] = k
@@ -445,30 +402,44 @@ class MPWMI:
         """
 
         res = 0
+        #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
+        #logger.debug(f"\t\t\t\tlen(integrand): {len(integrand)} --- y: {y}")
         for l, u, p in integrand:
             symx = symvar(x)
             symy = symvar(y) if y else symvar("aux_y")
 
             syml = Poly(to_sympy(l), symy, domain="QQ")
             symu = Poly(to_sympy(u), symy, domain="QQ")
+            #logger.debug(f"\t\t\t\t\tl: {l} --- u: {u} --- p: {p}")
             if type(p) != Poly:
                 symp = Poly(to_sympy(p), symx, domain="QQ")
             else:
                 symp = Poly(p.as_expr(), symx, domain=f"QQ[{symy}]") if y else p
 
-            if self.cache is not None:
-                # for bounds (l, u)
-                bds_ks = [cache_key2(syml)[0], cache_key2(symu)[0]]
-                bds = [syml.as_expr(), symu.as_expr()]
-                p_ks = cache_key2(symp)
-                trm_ks = [(bds_ks[0], p_ks[0]), (bds_ks[1], p_ks[0])]
+            if self.cache is not None:  # for cache = True
+                """ hierarchical cache, where we cache:
+                 - the anti-derivatives for integrands, retrieved by the same
+                       integrand key
+                 - the partial integration term, retrieved by the same
+                       (integrand key, lower / upper bound key) pair
+                 - the whole integration, retrieved by the same
+                       (integrand key, lower bound key, upper bound key) pair
+                """
+                bds_ks = [cache_key2(syml)[0],
+                          cache_key2(symu)[0]]  # cache keys for bounds
+                bds = [syml.as_expr(),
+                       symu.as_expr()]
+                p_ks = cache_key2(symp)  # cache key for integrand polynomial
+                trm_ks = [(bds_ks[0], p_ks[0]),
+                          (bds_ks[1], p_ks[0])]
                 if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
+                    # retrieve the whole integration
                     self.cache_hit[True] += 1
                     symintegral = self.cache[(bds_ks[0], bds_ks[1], p_ks[0])]
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
                 else:
                     terms = []
-                    for tk in trm_ks:  # retrieve terms
+                    for tk in trm_ks:  # retrieve partial integration terms
                         if tk in self.cache:
                             trm = self.cache[tk]
                             trm = trm.subs(trm.gens[0], symy)
@@ -479,7 +450,7 @@ class MPWMI:
                     if None not in terms:
                         self.cache_hit[True] += 1
                     else:
-                        if p_ks[0] in self.cache:  # retrieve antiderivative
+                        if p_ks[0] in self.cache:  # retrieve anti-derivative
                             antidrv = self.cache[p_ks[0]]
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
                             antidrv = Poly(antidrv_expr, symx,
@@ -488,7 +459,7 @@ class MPWMI:
                         else:
                             self.cache_hit[False] += 1
                             antidrv = symp.integrate(symx)
-                            for k in p_ks:  # cache antiderivative
+                            for k in p_ks:  # cache anti-derivative
                                 self.cache[k] = antidrv
 
                         for i in range(len(terms)):
@@ -496,18 +467,21 @@ class MPWMI:
                                 continue
                             terms[i] = antidrv.eval({symx: bds[i]})
                             terms[i] = Poly(terms[i].as_expr(), symy, domain="QQ")
-                            for k in p_ks:  # cache terms
+                            for k in p_ks:  # cache partial integration terms
                                 self.cache[(bds_ks[i], k)] = terms[i]
 
                     symintegral = terms[1] - terms[0]
-                    for k in p_ks:  # cache integration
+                    for k in p_ks:  # cache the whole integration
                         self.cache[(bds_ks[0], bds_ks[1], k)] = symintegral
 
-            else:
-                symintegral = symbolic_integral(symp, (symx, syml, symu))
-                logging.debug(f"\t\t\t\t\t sym integral done for symx: {symx} symp: {symp}")
+            else:  # for cache = False
+                antidrv = symp.integrate(symx)
+                symintegral = antidrv.eval({symx: symu.as_expr()}) - \
+                              antidrv.eval({symx: syml.as_expr()})
 
             res += symintegral
+            #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
+
         return res
 
     # TODO: document and refactor this
@@ -645,7 +619,7 @@ class MPWMI:
                 n_factors -= 1
 
             else:
-                assert(factors[msgid] is None)
+                assert(factors[msgid] is None), f"fuck {factors[msgid]}"
                 factors[msgid] = sympify(f)
                 l = x
                 n_factors += 1
@@ -662,13 +636,13 @@ class MPWMI:
         else:
             full_marginal = self._basecase_msg(x)
 
-        if (x,) in self.potentials:
+        x_potentials = self.primal.nodes()[x]['potentials']
+        if len(x_potentials) > 0:
             potential_msgs = self._parse_potentials(
-                self.potentials[(x,)], self.primal.nodes()[x]['var']
+                x_potentials, self.primal.nodes()[x]['var']
             )
-            full_marginal = self._get_msgs_intersection(
-                potential_msgs + [full_marginal]
-            )
+            potential_msgs.append(full_marginal)
+            full_marginal = self._get_msgs_intersection(potential_msgs)
 
         return full_marginal
 
@@ -735,13 +709,17 @@ class MPWMI:
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
-    from wmipa import WMI
     from pympwmi import set_logger_debug
+    from sys import argv
+    from wmipa import WMI
+
+    set_logger_debug()
 
     w = Symbol("w", REAL)
     x = Symbol("x", REAL)
     y = Symbol("y", REAL)
     z = Symbol("z", REAL)
+    """
 
     f = And(LE(Real(0), w), LE(w, Real(1)),
             LE(Real(0), x), LE(x, Real(1)),
@@ -751,6 +729,7 @@ if __name__ == '__main__':
             LE(Plus(x, y), Real(1)),
             LE(Plus(y, z), Real(1)))
 
+    w = Ite(LE(x, y), Real(2), Real(1))
     queries = [LE(w, Real(0.5)),
                LE(x, Real(0.5)),
                LE(y, Real(0.5)),
@@ -758,10 +737,20 @@ if __name__ == '__main__':
                LE(Plus(w, x), Real(0.5)),
                LE(Plus(x, y), Real(0.5)),
                LE(Plus(y, z), Real(0.5))]
-    w = Ite(LE(x, y), Real(2), Real(1))
+    """
+
+    f = And(LE(Real(0), x), LE(x, Real(1)),
+            LE(Real(0), y), LE(y, Real(1)),
+            LE(Real(0), z), LE(z, Real(1)))
+
+    w = Ite(LE(x, y), Plus(x,y), Real(1))
+
+    queries = [LE(x, Real(1/2)), LE(y, Real(1/2)), LE(x, y)]
+    
     mpwmi = MPWMI(f, w)
 
-    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=True)
+    
+    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=bool(int(argv[1])))
 
     wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)

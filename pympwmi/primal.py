@@ -1,8 +1,9 @@
 
 import networkx as nx
-from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal
+from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
 from pysmt.shortcuts import *
 from pympwmi import logger
+from pympwmi.sympysmt import sympy2pysmt
 
 
 MSG_NOT_CNF = "the formula must be in CNF"
@@ -11,11 +12,15 @@ MSG_NOT_CLAUSE = "the formula must be a clause"
 class PrimalGraph:
     """
     A class that implements the primal graph construction from a SMT-LRA 
-    'formula' and its manipulation. 
+    'formula' and a 'weight' mapping literals to polynomials.
 
     Raises NotImplementedError if 'formula':
     - is not in CNF
-    - contains clauses of ariety > 3
+    - contains clauses of ariety > 2
+
+    Raises NotImplementedError if 'weight':
+    - does not map literals to polynomials
+    - contains literals of ariety > 2
 
     Attributes
     ----------
@@ -37,22 +42,59 @@ class PrimalGraph:
         - the bivariate clauses on 'x' and 'y'
     """
 
-    def __init__(self, formula):
+    def __init__(self, formula, weight):
         """
         Parameters
         ----------
         formula : pysmt.FNode instance
             The input formula representing the support of the distribution
+        weight : pysmt.FNode instance
+            Polynomial potentials attached to literal values
         """
 
-        # TODO: why is this needed?
-        formula = flip_negated_literals_cnf(formula)
+        variables = set(formula.get_free_variables()).union(
+            weight.get_free_variables())
 
-        # builds the primal graph structure
+        # TODO: remove *flipping negated literals*
+        formula = flip_negated_literals_cnf(simplify(formula))
+        potentials = weight_to_lit_potentials(weight)
+
+        # ariety assumption
+        assert(all(len(dom) in [1,2] for dom in potentials))
+
+        # TODO: remove *flipping negated literals*
+        def flip_potential_pair(lw):
+            return (flip_negated_literals_cnf(lw[0]), lw[1])
+
+        for vs, vs_potentials in potentials.items():
+            potentials[vs] = list(map(flip_potential_pair, vs_potentials))
+
+        # initializing the nodes
         self.G = nx.Graph()
-        for var in formula.get_free_variables():
-            vname = var.symbol_name()
-            self.G.add_node(vname, var=var, clauses=set(), literals=set())
+        for var in variables:
+            varname = var.symbol_name()
+
+            if (varname,) in potentials:
+                varp = potentials[(varname,)]
+            else:
+                varp = []
+
+            # using str as node type
+            self.G.add_node(varname,
+                            var=var,
+                            clauses=set(),
+                            potentials=varp)
+
+        # initializing the edges
+        for x, y in [dom for dom in potentials if len(dom) == 2]:
+
+            # TODO: this shouldn't be necessary
+            cls = {Or(cond, flip_negated_literals_cnf(Not(cond)))
+                   for cond, _ in potentials[(x, y)]}
+            self.G.add_edge(x, y,
+                            clauses=cls,
+                            potentials=potentials[(x, y)])
+
 
         if is_literal(formula) or formula.is_or():
             self._add_clause(formula)
@@ -98,17 +140,18 @@ class PrimalGraph:
         #logger.debug(f"add clause: {serialize(clause)}")
         cvars = set()
         if is_literal(clause):
-            cvars = set(map(lambda var: var.symbol_name(), clause.get_free_variables()))
+            cvars = set(map(lambda var: var.symbol_name(),
+                            clause.get_free_variables()))
 
         elif clause.is_or():
             for l in clause.args():
                 if not is_literal(l):
                     raise NotImplementedError(MSG_NOT_CLAUSE)
 
-                lvars = set(map(lambda var: var.symbol_name(), l.get_free_variables()))
+                lvars = set(map(lambda var: var.symbol_name(),
+                                l.get_free_variables()))
                 cvars = cvars.union(lvars)
 
-            #logger.debug(f"is or with cvars: {cvars}")
 
         assert(len(cvars) > 0)
         if len(cvars) == 1:
@@ -123,8 +166,10 @@ class PrimalGraph:
 
             # multivariate clause
             for x, y in [[u, v] for u in cvars for v in cvars if u < v]:
-                if [x, y] not in self.G.edges:
-                    self.G.add_edge(x, y, clauses=set())
+                if (x, y) not in self.G.edges:
+                    self.G.add_edge(x, y,
+                                    clauses=set(),
+                                    potentials=[])
 
                 self.G.edges[[x, y]]['clauses'].add(clause)
 
@@ -134,6 +179,7 @@ class PrimalGraph:
         The returned CNF formula is a pysmt.FNode instance.
 
         Parameters
+
         ----------
         x : str
             The variable name
@@ -157,18 +203,24 @@ class PrimalGraph:
             The second variable name
         """
         return And(list(self.G.nodes[x]['clauses'])+
-                   list(self.G.nodes[x]['clauses'])+
+                   #list(self.G.nodes[y]['clauses'])+
                    list(self.G.edges[(x, y)]['clauses']))
 
-    def get_subformula(self, variables):
-        """
-        Returns the conjunction of clauses over (a subset of) 'variables'.
-        The returned CNF formula is a pysmt.FNode instance.
 
-        Parameters
-        ----------
-        variables : list of str
-            The list of the variables' names
-        """
-        # TODO: the structure should change in order to implement this
-        raise NotImplementedError("clauses of ariety > 2 are not supported yet")
+    def get_full_formula(self):
+        return And([unicl for x in self.G.nodes for unicl in self.G.nodes[x]['clauses']] +
+                   [bicl for e in self.G.edges for bicl in self.G.edges[e]['clauses']])
+
+    def get_wmi_problem(self):
+        all_potentials = []
+        for x in self.G.nodes: all_potentials.extend(self.G.nodes[x]['potentials'])
+        for e in self.G.edges: all_potentials.extend(self.G.edges[e]['potentials'])
+
+        formula = self.get_full_formula()
+        if len(all_potentials) > 0:
+            weight = Times([Ite(lit, sympy2pysmt(w), Real(1)) for lit, w in all_potentials])
+        else:
+            weight = Real(1)
+
+        return formula, weight
+                    

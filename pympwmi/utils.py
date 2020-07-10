@@ -1,8 +1,9 @@
 from fractions import Fraction
-from functools import reduce
 from typing import List, Dict
 
 from pympwmi import logger
+from pympwmi.sympysmt import pysmt2sympy
+
 from pysmt.fnode import FNode
 from pysmt.operators import POW
 from pysmt.shortcuts import And, Equals, LE, LT, Or, REAL, Real, simplify, substitute, \
@@ -19,6 +20,13 @@ RAND_SEED = 1337
 SMT_SOLVER = "msat"
 # SMT_SOLVER = "z3"
 # SMT_SOLVER = "cvc4"
+
+#SAFEEXP_CLAMPING = float_info.max
+# try decreasing the clamping whenever compensate(..) crashes due to
+# NaN potentials
+# TODO: (maybe) set this value according to the number of dimensions
+SAFEEXP_CLAMPING = 1000
+LOG_ZERO = -1000
 
 UPPER = 1
 LOWER = 2
@@ -65,6 +73,10 @@ def atom_to_bound(atom: FNode, x_symbol: FNode):
     new_y_coef = simplify(y_coef_diff * Real(-1) / x_coef_diff)
     bound = Plus(bound, Times(new_y_coef, y_symbol))
     return [bound, bound_type]
+
+
+def cache_key2(p):
+    return dict_to_tuple(p.as_dict(native=True))
 
 
 def categorize_bounds(formula: FNode, sender_symbol: FNode):
@@ -639,34 +651,11 @@ def to_sympy(expr):
     except ValueError:
         pass
     if type(expr) == FNode:
-        return pysmt_to_sympy(expr)
+        return pysmt2sympy(expr)
     else:
         # TODO: here we might want to add some sanity checks on the input
         # instead of just returning it unaltered.
         return expr
-
-
-def pysmt_to_sympy(expr):
-    """
-    Convert a pysmt expression into the sympy format.
-
-    Parameters
-    ----------
-    expr : pysmt.FNode
-        The pysmt expression
-    """
-    if expr.is_constant():
-        return Fraction(expr.constant_value())
-    if expr.is_symbol():
-        return symSymbol(expr.symbol_name())
-    else:
-        subexpr = list(map(lambda x: pysmt_to_sympy(x), expr.args()))
-        if expr.node_type() == POW:
-            return Pow(subexpr[0], subexpr[1])
-        elif expr.is_times():
-            return Mul(*subexpr)
-        elif expr.is_plus():
-            return Add(*subexpr)
 
 
 def weight_to_lit_potentials(expr):
@@ -762,8 +751,16 @@ def dict_to_tuple(d):
         ))]
 
 
-def cache_key2(p):
-    return dict_to_tuple(p.as_dict(native=True))
+def safeexp(x):
+    return min(np.exp(x), SAFEEXP_CLAMPING)
+
+
+def safelog(x):
+    x = float(x)
+    if np.isclose(x, 0.0):
+        return LOG_ZERO
+    else:
+        return np.log(x)
 
 
 def solve_equation(lhs: FNode,
