@@ -52,61 +52,61 @@ class PrimalGraph:
             Polynomial potentials attached to literal values
         """
 
-        variables = set(formula.get_free_variables()).union(
-            weight.get_free_variables())
+        if formula is not None and weight is not None:
 
-        # TODO: remove *flipping negated literals*
-        formula = flip_negated_literals_cnf(simplify(formula))
-        potentials = weight_to_lit_potentials(weight)
+            variables = set(formula.get_free_variables()).union(
+                weight.get_free_variables())
 
-        # ariety assumption
-        assert(all(len(dom) in [1,2] for dom in potentials))
+            # TODO: remove *flipping negated literals*
+            formula = flip_negated_literals_cnf(simplify(formula))
+            potentials = weight_to_lit_potentials(weight)
 
-        # TODO: remove *flipping negated literals*
-        def flip_potential_pair(lw):
-            return (flip_negated_literals_cnf(lw[0]), lw[1])
+            # ariety assumption
+            assert(all(len(dom) in [1,2] for dom in potentials))
 
-        for vs, vs_potentials in potentials.items():
-            potentials[vs] = list(map(flip_potential_pair, vs_potentials))
+            # TODO: remove *flipping negated literals*
+            def flip_potential_pair(lw):
+                return (flip_negated_literals_cnf(lw[0]), lw[1])
 
-        # initializing the nodes
-        self.G = nx.Graph()
-        for var in variables:
-            varname = var.symbol_name()
+            for vs, vs_potentials in potentials.items():
+                potentials[vs] = list(map(flip_potential_pair, vs_potentials))
 
-            if (varname,) in potentials:
-                varp = potentials[(varname,)]
-            else:
-                varp = []
+            # initializing the nodes
+            self.G = nx.Graph()
+            for var in variables:
+                varname = var.symbol_name()
 
-            # using str as node type
-            self.G.add_node(varname,
-                            var=var,
-                            clauses=set(),
-                            potentials=varp)
-
-        # initializing the edges
-        for x, y in [dom for dom in potentials if len(dom) == 2]:
-
-            # TODO: this shouldn't be necessary
-            cls = {Or(cond, flip_negated_literals_cnf(Not(cond)))
-                   for cond, _ in potentials[(x, y)]}
-            self.G.add_edge(x, y,
-                            clauses=cls,
-                            potentials=potentials[(x, y)])
-
-
-        if is_literal(formula) or formula.is_or():
-            self._add_clause(formula)
-
-        elif formula.is_and():
-            for clause in formula.args():
-                if is_literal(clause) or clause.is_or():
-                    self._add_clause(clause)
+                if (varname,) in potentials:
+                    varp = potentials[(varname,)]
                 else:
-                    raise NotImplementedError(MSG_NOT_CNF)
-        else:
-            raise NotImplementedError(MSG_NOT_CNF)
+                    varp = []
+
+                # using str as node type
+                self.G.add_node(varname,
+                                var=var,
+                                clauses=set(),
+                                potentials=varp)
+
+            # initializing the edges
+            for x, y in [dom for dom in potentials if len(dom) == 2]:
+
+                # TODO: this shouldn't be necessary
+                cls = {Or(cond, flip_negated_literals_cnf(Not(cond)))
+                       for cond, _ in potentials[(x, y)]}
+                self.G.add_edge(x, y, clauses=cls, potentials=potentials[(x, y)])
+
+
+            if is_literal(formula) or formula.is_or():
+                self._add_clause(formula)
+
+            elif formula.is_and():
+                for clause in formula.args():
+                    if is_literal(clause) or clause.is_or():
+                        self._add_clause(clause)
+                    else:
+                        raise NotImplementedError(MSG_NOT_CNF)
+            else:
+                raise NotImplementedError(MSG_NOT_CNF)
 
 
     def nodes(self):
@@ -224,3 +224,9 @@ class PrimalGraph:
 
         return formula, weight
                     
+
+    @staticmethod
+    def from_graph(g):
+        primal = PrimalGraph(None, None)
+        primal.G = g
+        return primal
