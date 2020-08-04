@@ -1,5 +1,6 @@
 
 from functools import reduce
+from fractions import Fraction
 from multiprocessing import Pool, Manager
 import networkx as nx
 from networkx.algorithms.components import connected_components
@@ -14,7 +15,8 @@ from sympy import integrate as symbolic_integral, Poly
 from sympy import sympify
 from sympy.core.mul import Mul as symbolic_mul
 from sympy.core.symbol import Symbol as symvar
-
+from sympy.polys.rings import PolyElement
+from sympy.polys.fields import FracElement
 
 class MP2WMI:
     """
@@ -300,6 +302,7 @@ class MP2WMI:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
+        #print("EXEC-ORDER", exec_order)
         for n in exec_order:
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
@@ -469,6 +472,9 @@ class MP2WMI:
         x : object
             A string/sympy expression representing the integration variable
         """
+        #print("vars:",x,y,)
+        #print("\n".join(map(str,integrand)))
+        #print("---")
 
         
         cache_hit = [0, 0] if (cache is not None) else None
@@ -479,9 +485,9 @@ class MP2WMI:
         for l, u, p in integrand:
             symx = symvar(x)
             symy = symvar(y) if y else symvar("aux_y")
-
-            syml = Poly(to_sympy(l), symy, domain="QQ")
+            syml = Poly(to_sympy(l), symy, domain="QQ")            
             symu = Poly(to_sympy(u), symy, domain="QQ")
+
             #logger.debug(f"\t\t\t\t\tl: {l} --- u: {u} --- p: {p}")
             if type(p) != Poly:
                 symp = Poly(to_sympy(p), symx, domain="QQ")
@@ -490,61 +496,74 @@ class MP2WMI:
 
             if cache is not None:  # for cache = True
                 """ hierarchical cache, where we cache:
-                 - the anti-derivatives for integrands, retrieved by the same
-                       integrand key
-                 - the partial integration term, retrieved by the same
-                       (integrand key, lower / upper bound key) pair
-                 - the whole integration, retrieved by the same
-                       (integrand key, lower bound key, upper bound key) pair
+                 - the anti-derivatives for integrands, retrieved by:
+                       (None, None, integrand key)
+                 - the partial integration term, retrieved by:
+                       (lower bound key, None, integrand key)
+                       (None, upper bound key, integrand key)
+                 - the whole integration, retrieved by:
+                       (lower bound key, upper bound key, integrand key)
                 """
-                bds_ks = [cache_key2(syml)[0],
-                          cache_key2(symu)[0]]  # cache keys for bounds
-                bds = [syml.as_expr(),
-                       symu.as_expr()]
-                p_ks = cache_key2(symp)  # cache key for integrand polynomial
-                trm_ks = [(bds_ks[0], p_ks[0]),
-                          (bds_ks[1], p_ks[0])]
-                if (bds_ks[0], bds_ks[1], p_ks[0]) in cache:
+                # cache keys for bounds
+                k_lower = MP2WMI.sympy_to_tuple(syml)
+                k_upper = MP2WMI.sympy_to_tuple(symu)
+                k_poly = MP2WMI.sympy_to_tuple(symp)  # cache key for integrand polynomial
+                k_full = (k_lower, k_upper, k_poly)
+
+                if k_full in cache:
                     # retrieve the whole integration
+                    #print("full hit!")
                     cache_hit[True] += 1
-                    symintegral = cache[(bds_ks[0], bds_ks[1], p_ks[0])]
+                    symintegral = MP2WMI.tuple_to_sympy(cache[k_full], symx, symy)
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
+
                 else:
-                    terms = []
-                    for tk in trm_ks:  # retrieve partial integration terms
-                        if tk in cache:
-                            trm = cache[tk]
-                            trm = trm.subs(trm.gens[0], symy)
-                            terms.append(trm)
-                        else:
-                            terms.append(None)
+                    # retrieve partial integration terms
+                    terms = [None, None]
+                    k_part_l = (k_lower, k_poly)
+                    k_part_u = (k_upper, k_poly)
+                    if k_part_l in cache:
+                        partial_l = MP2WMI.tuple_to_sympy(cache[k_part_l], symx, symy)
+                        terms[0] = partial_l.subs(partial_l.gens[0], symy)
+
+                    if k_part_u in cache:
+                        partial_u = MP2WMI.tuple_to_sympy(cache[k_part_u], symx, symy)
+                        terms[1] = partial_u.subs(partial_u.gens[0], symy)
 
                     if None not in terms:
+                        #print("partial hit!")
                         cache_hit[True] += 1
                     else:
-                        if p_ks[0] in cache:  # retrieve anti-derivative
-                            antidrv = cache[p_ks[0]]
+                        # retrieve anti-derivative
+                        k_anti = (k_poly,)
+                        if k_anti in cache:
+                            #print("anti hit!")
+                            cache_hit[True] += 1
+                            antidrv = MP2WMI.tuple_to_sympy(cache[k_anti], symx, symy)
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
-                            antidrv = Poly(antidrv_expr, symx,
-                                           domain=f"QQ[{symy}]") if y \
-                                else Poly(antidrv_expr, symx, domain="QQ")
+                            if y:
+                                antidrv = Poly(antidrv_expr, symx, domain=f"QQ[{symy}]")
+                            else:
+                                antidrv = Poly(antidrv_expr, symx, domain="QQ")
                         else:
                             cache_hit[False] += 1
                             antidrv = symp.integrate(symx)
-                            for k in p_ks:  # cache anti-derivative
-                                cache[k] = antidrv
+                            #for k in k_poly:  # cache anti-derivative
+                            cache[k_anti] = MP2WMI.sympy_to_tuple(antidrv)
 
-                        for i in range(len(terms)):
-                            if terms[i] is not None:
-                                continue
-                            terms[i] = antidrv.eval({symx: bds[i]})
-                            terms[i] = Poly(terms[i].as_expr(), symy, domain="QQ")
-                            for k in p_ks:  # cache partial integration terms
-                                cache[(bds_ks[i], k)] = terms[i]
+                        # cache partial integration terms
+                        if terms[0] is None:
+                            terms[0] = antidrv.eval({symx: syml.as_expr()})
+                            terms[0] = Poly(terms[0].as_expr(), symy, domain="QQ")
+                            cache[k_part_l] = MP2WMI.sympy_to_tuple(terms[0])                            
+
+                        if terms[1] is None:
+                            terms[1] = antidrv.eval({symx: symu.as_expr()})
+                            terms[1] = Poly(terms[1].as_expr(), symy, domain="QQ")
+                            cache[k_part_u] = MP2WMI.sympy_to_tuple(terms[1])
 
                     symintegral = terms[1] - terms[0]
-                    for k in p_ks:  # cache the whole integration
-                        cache[(bds_ks[0], bds_ks[1], k)] = symintegral
+                    cache[k_full] = MP2WMI.sympy_to_tuple(symintegral)
 
             else:  # for cache = False
                 antidrv = symp.integrate(symx)
@@ -554,6 +573,8 @@ class MP2WMI:
             res += symintegral
             #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
 
+        #print("RESULT:", res)
+        #print("**************************************************")
         return res, cache_hit
 
     # TODO: document and refactor this
@@ -769,17 +790,38 @@ class MP2WMI:
         return f_msgs
 
     @staticmethod
-    def cache_key(l, u, poly, x):
-        ls = sympify(l)
-        us = sympify(u)
-        polys = sympify(poly)
-        ord_vars = ordered_variables(polys)
-        renaming = {v: symvar(f"aux_{i}") for i, v in enumerate(ord_vars)}
+    def sympy_to_tuple(p):
+        d = p.as_dict(native=True)
+        if d == {}:
+            assert (p == 0)
+            return (((0,0), 0),) # the Zero tuple
 
-        return (ls.subs(renaming),
-                us.subs(renaming),
-                polys.subs(renaming),
-                x.subs(renaming))
+        else:
+            l = []
+            for k, v in d.items():
+                tk = tuple(map(int, k))
+                if isinstance(v, PolyElement):
+                    tv = int(v.coeff(1))
+                elif isinstance(v, FracElement):
+                    tv = Fraction(int(v.numer.coeff(1)), int(v.denom.coeff(1)))
+                else:
+                    tv = v
+
+                l.append((tk, tv))
+                
+            #return tuple(sorted((tuple(map(int, k)), float(v)) for k, v in d.items()))
+            return tuple(sorted(l))
+
+    @staticmethod
+    def tuple_to_sympy(t, x, y):
+        d = dict(t)
+        nvars = len(t[0][0])        
+        if nvars == 1:
+            return Poly.from_dict(d, x)
+        elif nvars == 2:
+            return Poly.from_dict(d, x, y)
+        else:
+            raise ValueError("Expected univariate or bivariate expression")
 
 
 if __name__ == '__main__':
