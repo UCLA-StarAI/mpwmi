@@ -122,8 +122,6 @@ class MP2WMI:
         # compute the partition function as the product of the marginals of any node
         # for each connected component in the primal graph
         components = list(connected_components(self.primal.G))
-        print("#components:", [len(c) for c in components])
-
         subproblems = []
         pysmt_env = get_env()
         for comp_vars in components:
@@ -302,7 +300,7 @@ class MP2WMI:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
-        #print("EXEC-ORDER", exec_order)
+        print("EXEC-ORDER", exec_order)
         for n in exec_order:
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
@@ -472,9 +470,9 @@ class MP2WMI:
         x : object
             A string/sympy expression representing the integration variable
         """
-        #print("vars:",x,y,)
-        #print("\n".join(map(str,integrand)))
-        #print("---")
+        print("vars:",x,y,)
+        print("\n".join(map(str,integrand)))
+        print("---")
 
         
         cache_hit = [0, 0] if (cache is not None) else None
@@ -512,7 +510,7 @@ class MP2WMI:
 
                 if k_full in cache:
                     # retrieve the whole integration
-                    #print("full hit!")
+                    print("full hit!")
                     cache_hit[True] += 1
                     symintegral = MP2WMI.tuple_to_sympy(cache[k_full], symx, symy)
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
@@ -531,13 +529,13 @@ class MP2WMI:
                         terms[1] = partial_u.subs(partial_u.gens[0], symy)
 
                     if None not in terms:
-                        #print("partial hit!")
+                        print("partial hit!")
                         cache_hit[True] += 1
                     else:
                         # retrieve anti-derivative
                         k_anti = (k_poly,)
                         if k_anti in cache:
-                            #print("anti hit!")
+                            print("anti hit!")
                             cache_hit[True] += 1
                             antidrv = MP2WMI.tuple_to_sympy(cache[k_anti], symx, symy)
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
@@ -573,8 +571,8 @@ class MP2WMI:
             res += symintegral
             #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
 
-        #print("RESULT:", res)
-        #print("**************************************************")
+        print("RESULT:", res)
+        print("**************************************************")
         return res, cache_hit
 
     # TODO: document and refactor this
@@ -856,13 +854,13 @@ if __name__ == '__main__':
                LE(Plus(y, z), Real(0.5))]
     """
 
-    f = And(LE(Real(0), x), LE(x, Real(1)),
-            LE(Real(0), y), LE(y, Real(1)),
-            LE(Real(0), z), LE(z, Real(1)))
+    f = And(LE(Real(1), x), LE(x, Real(2)),
+            LE(Real(1), y), LE(y, Real(2)),
+            LE(Real(1), z), LE(z, Real(2)))
 
     w = Ite(LE(x, y), Plus(x,y), Real(1))
 
-    queries = [LE(x, Real(1/2)), LE(y, Real(1/2)), LE(x, y)]
+    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
     
     mpwmi = MP2WMI(f, w, n_processes=3)
 
@@ -872,7 +870,7 @@ if __name__ == '__main__':
     wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
     print("==================================================")
-    print(f"Z\t\t\t{Z_mp}\t{Z_pa}")
+    print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")
     for i, q in enumerate(queries):
         pq_pa, _ = wmipa.computeWMI(q, mode=WMI.MODE_PA)
         print(f"{q}\t\t\t{pq_mp[i]}\t{pq_pa}")

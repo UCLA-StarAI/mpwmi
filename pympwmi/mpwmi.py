@@ -234,7 +234,7 @@ class MPWMI:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
-        #print("EXEC-ORDER", exec_order)
+        print("EXEC-ORDER", exec_order)
         for n in exec_order:
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
@@ -401,9 +401,9 @@ class MPWMI:
         x : object
             A string/sympy expression representing the integration variable
         """
-        #print("vars:",x,y,)
-        #print("\n".join(map(str,integrand)))
-        #print("---")
+        print("vars:",x,y,)
+        print("\n".join(map(str,integrand)))
+        print("---")
 
         res = 0
         #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
@@ -438,7 +438,7 @@ class MPWMI:
                           (bds_ks[1], p_ks[0])]
                 if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
                     # retrieve the whole integration
-                    #print("full hit!")
+                    print("full hit!")
                     self.cache_hit[True] += 1
                     symintegral = self.cache[(bds_ks[0], bds_ks[1], p_ks[0])]
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
@@ -453,11 +453,11 @@ class MPWMI:
                             terms.append(None)
 
                     if None not in terms:
-                        #print("partial hit!")
+                        print("partial hit!")
                         self.cache_hit[True] += 1
                     else:
                         if p_ks[0] in self.cache:  # retrieve anti-derivative
-                            #print("anti hit!")
+                            print("anti hit!")
                             self.cache_hit[True] += 1
                             antidrv = self.cache[p_ks[0]]
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
@@ -489,8 +489,8 @@ class MPWMI:
 
             res += symintegral
             #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
-        #print("RESULT:", res)
-        #print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+        print("RESULT:", res)
+        print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         return res
 
     # TODO: document and refactor this
@@ -739,13 +739,13 @@ if __name__ == '__main__':
                LE(Plus(y, z), Real(0.5))]
     """
 
-    f = And(LE(Real(0), x), LE(x, Real(1)),
-            LE(Real(0), y), LE(y, Real(1)),
-            LE(Real(0), z), LE(z, Real(1)))
+    f = And(LE(Real(1), x), LE(x, Real(2)),
+            LE(Real(1), y), LE(y, Real(2)),
+            LE(Real(1), z), LE(z, Real(2)))
 
     w = Ite(LE(x, y), Plus(x,y), Real(1))
 
-    queries = [LE(x, Real(1/2)), LE(y, Real(1/2)), LE(x, y)]
+    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
     
     mpwmi = MPWMI(f, w)
 
@@ -755,7 +755,7 @@ if __name__ == '__main__':
     wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
     print("==================================================")
-    print(f"Z\t\t\t{Z_mp}\t{Z_pa}")
+    print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")
     for i, q in enumerate(queries):
         pq_pa, _ = wmipa.computeWMI(q, mode=WMI.MODE_PA)
         print(f"{q}\t\t\t{pq_mp[i]}\t{pq_pa}")
