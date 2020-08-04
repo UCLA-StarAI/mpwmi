@@ -190,10 +190,10 @@ class MPWMI:
 
         if self.cache_hit is not None:
             # TODO: check if cache_hit index should be True or False
-            logger.debug("\tHITS: {}/{} (ratio {})".format(self.cache_hit[True],
-                                                          sum(self.cache_hit),
-                                                          self.cache_hit[True] /
-                                                          sum(self.cache_hit)))
+            print("\tHITS: {}/{} (ratio {})".format(self.cache_hit[True],
+                                                    sum(self.cache_hit),
+                                                    self.cache_hit[True] /
+                                                    sum(self.cache_hit)))
 
         Z = float(Z.as_expr())
         query_volumes = [float(qv.as_expr()) for qv in query_volumes]
@@ -234,6 +234,7 @@ class MPWMI:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
+        #print("EXEC-ORDER", exec_order)
         for n in exec_order:
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
@@ -400,6 +401,9 @@ class MPWMI:
         x : object
             A string/sympy expression representing the integration variable
         """
+        #print("vars:",x,y,)
+        #print("\n".join(map(str,integrand)))
+        #print("---")
 
         res = 0
         #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
@@ -425,15 +429,16 @@ class MPWMI:
                  - the whole integration, retrieved by the same
                        (integrand key, lower bound key, upper bound key) pair
                 """
-                bds_ks = [cache_key2(syml)[0],
-                          cache_key2(symu)[0]]  # cache keys for bounds
+                bds_ks = [MPWMI.cache_key(syml)[0],
+                          MPWMI.cache_key(symu)[0]]  # cache keys for bounds
                 bds = [syml.as_expr(),
                        symu.as_expr()]
-                p_ks = cache_key2(symp)  # cache key for integrand polynomial
+                p_ks = MPWMI.cache_key(symp)  # cache key for integrand polynomial
                 trm_ks = [(bds_ks[0], p_ks[0]),
                           (bds_ks[1], p_ks[0])]
                 if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
                     # retrieve the whole integration
+                    #print("full hit!")
                     self.cache_hit[True] += 1
                     symintegral = self.cache[(bds_ks[0], bds_ks[1], p_ks[0])]
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
@@ -448,9 +453,12 @@ class MPWMI:
                             terms.append(None)
 
                     if None not in terms:
+                        #print("partial hit!")
                         self.cache_hit[True] += 1
                     else:
                         if p_ks[0] in self.cache:  # retrieve anti-derivative
+                            #print("anti hit!")
+                            self.cache_hit[True] += 1
                             antidrv = self.cache[p_ks[0]]
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
                             antidrv = Poly(antidrv_expr, symx,
@@ -481,7 +489,8 @@ class MPWMI:
 
             res += symintegral
             #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
-
+        #print("RESULT:", res)
+        #print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         return res
 
     # TODO: document and refactor this
@@ -694,17 +703,8 @@ class MPWMI:
         return f_msgs
 
     @staticmethod
-    def cache_key(l, u, poly, x):
-        ls = sympify(l)
-        us = sympify(u)
-        polys = sympify(poly)
-        ord_vars = ordered_variables(polys)
-        renaming = {v: symvar(f"aux_{i}") for i, v in enumerate(ord_vars)}
-
-        return (ls.subs(renaming),
-                us.subs(renaming),
-                polys.subs(renaming),
-                x.subs(renaming))
+    def cache_key(p):
+        return dict_to_tuple(p.as_dict(native=True))
 
 
 if __name__ == '__main__':

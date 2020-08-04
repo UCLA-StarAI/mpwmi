@@ -1,3 +1,5 @@
+
+from collections import defaultdict
 from fractions import Fraction
 from typing import List, Dict
 
@@ -75,10 +77,6 @@ def atom_to_bound(atom: FNode, x_symbol: FNode):
     return [bound, bound_type]
 
 
-def cache_key2(p):
-    return dict_to_tuple(p.as_dict(native=True))
-
-
 def categorize_bounds(formula: FNode, sender_symbol: FNode):
     """
     categorize symbolic bounds for a given variable
@@ -95,7 +93,6 @@ def categorize_bounds(formula: FNode, sender_symbol: FNode):
             assert is_literal(clause) or clause.is_or()
             clauses.add(clause)
 
-    from collections import defaultdict
     bounds = defaultdict(list)
     for clause in clauses:
         if clause.is_le() or clause.is_lt():  # single literal clause
@@ -323,7 +320,6 @@ def get_coefficients(atom: FNode):
     :return: dict with keys as variable symbol and values as coefficient in atom
     """
     variables = list(get_real_variables(atom))
-    from collections import defaultdict
     coefficients = defaultdict(int)
 
     if len(variables) == 0:
@@ -733,22 +729,22 @@ def ordered_variables(expr):
 
 def dict_to_tuple(d):
     if d == {}:
-        return [(((), symReal(0)))]
+        return ((((), symReal(0))))
 
     t = list(d.keys())
     assert len(t[0]) < 3, f"t[0] = {t[0]} should not happen"
     if len(t[0]) == 1:
-        return [tuple(sorted(
+        return (tuple(sorted(
             (tuple((k, v)) for k, v in d.items()), key=lambda p: p[0][0]
-        ))]
+        )))
     elif len(t[0]) == 2:
-        return [tuple(sorted(
+        return (tuple(sorted(
             (tuple((k, v)) for k, v in d.items()),
             key=lambda p: (p[0][0], p[0][1])
         )), tuple(sorted(
             (tuple(((k[1], k[0]), v)) for k, v in d.items()),
             key=lambda p: (p[0][0], p[0][1])
-        ))]
+        )))
 
 
 def safeexp(x):
