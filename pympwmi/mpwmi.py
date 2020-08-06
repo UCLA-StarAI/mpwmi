@@ -425,11 +425,11 @@ class MPWMI:
                  - the whole integration, retrieved by the same
                        (integrand key, lower bound key, upper bound key) pair
                 """
-                bds_ks = [cache_key2(syml)[0],
-                          cache_key2(symu)[0]]  # cache keys for bounds
+                bds_ks = [MPWMI.cache_key(syml)[0],
+                          MPWMI.cache_key(symu)[0]]  # cache keys for bounds
                 bds = [syml.as_expr(),
                        symu.as_expr()]
-                p_ks = cache_key2(symp)  # cache key for integrand polynomial
+                p_ks = MPWMI.cache_key(symp)  # cache key for integrand polynomial
                 trm_ks = [(bds_ks[0], p_ks[0]),
                           (bds_ks[1], p_ks[0])]
                 if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
@@ -694,18 +694,8 @@ class MPWMI:
         return f_msgs
 
     @staticmethod
-    def cache_key(l, u, poly, x):
-        ls = sympify(l)
-        us = sympify(u)
-        polys = sympify(poly)
-        ord_vars = ordered_variables(polys)
-        renaming = {v: symvar(f"aux_{i}") for i, v in enumerate(ord_vars)}
-
-        return (ls.subs(renaming),
-                us.subs(renaming),
-                polys.subs(renaming),
-                x.subs(renaming))
-
+    def cache_key(p):
+        return dict_to_tuple(p.as_dict(native=True))
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
@@ -739,13 +729,13 @@ if __name__ == '__main__':
                LE(Plus(y, z), Real(0.5))]
     """
 
-    f = And(LE(Real(0), x), LE(x, Real(1)),
-            LE(Real(0), y), LE(y, Real(1)),
-            LE(Real(0), z), LE(z, Real(1)))
+    f = And(LE(Real(1), x), LE(x, Real(2)),
+            LE(Real(1), y), LE(y, Real(2)),
+            LE(Real(1), z), LE(z, Real(2)))
 
     w = Ite(LE(x, y), Plus(x,y), Real(1))
 
-    queries = [LE(x, Real(1/2)), LE(y, Real(1/2)), LE(x, y)]
+    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
     
     mpwmi = MPWMI(f, w)
 
@@ -755,7 +745,7 @@ if __name__ == '__main__':
     wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
     print("==================================================")
-    print(f"Z\t\t\t{Z_mp}\t{Z_pa}")
+    print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")
     for i, q in enumerate(queries):
         pq_pa, _ = wmipa.computeWMI(q, mode=WMI.MODE_PA)
         print(f"{q}\t\t\t{pq_mp[i]}\t{pq_pa}")
