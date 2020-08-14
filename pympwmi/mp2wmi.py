@@ -18,6 +18,7 @@ from sympy.core.symbol import Symbol as symvar
 from sympy.polys.rings import PolyElement
 from sympy.polys.fields import FracElement
 
+
 class MP2WMI:
     """
     A class that implements the Message Passing Model Integration exact
@@ -343,7 +344,8 @@ class MP2WMI:
 
         assert(primal.G.degree[x] <= 1)
         intervals = domains_to_intervals(primal.get_univariate_formula(x))
-        one = Poly(1, symvar(x), domain="QQ")
+        # cacca one = Poly(1, symvar(x),  domain="QQ")
+        one = Poly(1, symvar(x), symvar("aux_y"), domain="QQ")
         return list(map(lambda i: (i[0], i[1], one), intervals))
 
     @staticmethod
@@ -470,28 +472,21 @@ class MP2WMI:
         x : object
             A string/sympy expression representing the integration variable
         """
-        print("vars:",x,y,)
-        print("\n".join(map(str,integrand)))
-        print("---")
-
-        
         cache_hit = [0, 0] if (cache is not None) else None
 
         res = 0
-        #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
-        #logger.debug(f"\t\t\t\tlen(integrand): {len(integrand)} --- y: {y}")
         for l, u, p in integrand:
             symx = symvar(x)
             symy = symvar(y) if y else symvar("aux_y")
             syml = Poly(to_sympy(l), symy, domain="QQ")            
             symu = Poly(to_sympy(u), symy, domain="QQ")
 
-            #logger.debug(f"\t\t\t\t\tl: {l} --- u: {u} --- p: {p}")
             if type(p) != Poly:
                 symp = Poly(to_sympy(p), symx, domain="QQ")
             else:
-                symp = Poly(p.as_expr(), symx, domain=f"QQ[{symy}]") if y else p
+                symp = Poly(p.as_expr(), symx, symy, domain="QQ")
 
+            #print("integrating", symp.as_expr(), f"in d{symx} with bounds", [syml.as_expr(), symu.as_expr()])
             if cache is not None:  # for cache = True
                 """ hierarchical cache, where we cache:
                  - the anti-derivatives for integrands, retrieved by:
@@ -508,9 +503,13 @@ class MP2WMI:
                 k_poly = MP2WMI.sympy_to_tuple(symp)  # cache key for integrand polynomial
                 k_full = (k_lower, k_upper, k_poly)
 
+                #print("========= KEYS =========")
+                #print("lower:", syml.as_expr(), "-->", k_lower)
+                #print("upper:", symu.as_expr(), "-->", k_upper)
+                #print("poly:", symp.as_expr(), "-->", k_poly)
+                #print("========================")
                 if k_full in cache:
-                    # retrieve the whole integration
-                    print("full hit!")
+                    # retrieve the whole integration                    
                     cache_hit[True] += 1
                     symintegral = MP2WMI.tuple_to_sympy(cache[k_full], symx, symy)
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
@@ -529,50 +528,54 @@ class MP2WMI:
                         terms[1] = partial_u.subs(partial_u.gens[0], symy)
 
                     if None not in terms:
-                        print("partial hit!")
                         cache_hit[True] += 1
                     else:
                         # retrieve anti-derivative
                         k_anti = (k_poly,)
-                        if k_anti in cache:
-                            print("anti hit!")
+                        if k_anti in cache:                            
                             cache_hit[True] += 1
                             antidrv = MP2WMI.tuple_to_sympy(cache[k_anti], symx, symy)
-                            antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
-                            if y:
-                                antidrv = Poly(antidrv_expr, symx, domain=f"QQ[{symy}]")
-                            else:
-                                antidrv = Poly(antidrv_expr, symx, domain="QQ")
+
                         else:
                             cache_hit[False] += 1
                             antidrv = symp.integrate(symx)
-                            #for k in k_poly:  # cache anti-derivative
                             cache[k_anti] = MP2WMI.sympy_to_tuple(antidrv)
 
                         # cache partial integration terms
                         if terms[0] is None:
-                            terms[0] = antidrv.eval({symx: syml.as_expr()})
-                            terms[0] = Poly(terms[0].as_expr(), symy, domain="QQ")
-                            cache[k_part_l] = MP2WMI.sympy_to_tuple(terms[0])                            
+                            terms[0] = Poly(antidrv.as_expr(), symx,
+                                            domain=f'QQ[{symy}]').eval({symx: syml.as_expr()})
+                            terms[0] = Poly(terms[0].as_expr(), symx, symy, domain="QQ")
+                            cache[k_part_l] = MP2WMI.sympy_to_tuple(terms[0])
 
                         if terms[1] is None:
-                            terms[1] = antidrv.eval({symx: symu.as_expr()})
-                            terms[1] = Poly(terms[1].as_expr(), symy, domain="QQ")
+                            terms[1] = Poly(antidrv.as_expr(), symx,
+                                            domain=f'QQ[{symy}]').eval({symx: symu.as_expr()})
+                            terms[1] = Poly(terms[1].as_expr(), symx, symy, domain="QQ")
                             cache[k_part_u] = MP2WMI.sympy_to_tuple(terms[1])
 
+                    #print("subs: (", terms[1].as_expr(), ") - (", terms[0].as_expr(), ")")
                     symintegral = terms[1] - terms[0]
+                    if not isinstance(symintegral, Poly):
+                        symintegral = Poly(symintegral, symx, symy, domain='QQ')
                     cache[k_full] = MP2WMI.sympy_to_tuple(symintegral)
 
             else:  # for cache = False
                 antidrv = symp.integrate(symx)
-                symintegral = antidrv.eval({symx: symu.as_expr()}) - \
-                              antidrv.eval({symx: syml.as_expr()})
+                lower = Poly(antidrv.as_expr(), symx,
+                             domain=f'QQ[{symy}]').eval({symx: syml.as_expr()})
+                lower = Poly(lower.as_expr(), symx, symy, domain="QQ")
+                upper = Poly(antidrv.as_expr(), symx,
+                             domain=f'QQ[{symy}]').eval({symx: symu.as_expr()})
+                upper = Poly(upper.as_expr(), symx, symy, domain="QQ")
+                symintegral = upper - lower
 
             res += symintegral
-            #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
+            #print("integral:", symintegral.as_expr())
+            #print()
 
-        print("RESULT:", res)
-        print("**************************************************")
+        #print("RESULT:", res)
+        #print("**************************************************")
         return res, cache_hit
 
     # TODO: document and refactor this
@@ -627,7 +630,8 @@ class MP2WMI:
     def _parse_potentials(potentials, xvar, subs=None):
         msgs = []
         symx = symvar(str(xvar))
-        one = Poly(1, symx, domain="QQ")
+        # cacca one = Poly(1, symx, domain="QQ")
+        one = Poly(1, symx, symvar("aux_y"), domain="QQ")
         for lit, f in potentials:
             msg = []
             k, is_lower, _ = literal_to_bounds(lit)[xvar]
@@ -808,16 +812,17 @@ class MP2WMI:
                 l.append((tk, tv))
                 
             #return tuple(sorted((tuple(map(int, k)), float(v)) for k, v in d.items()))
-            return tuple(sorted(l))
+            t = tuple(sorted(l))
+            return t
 
     @staticmethod
     def tuple_to_sympy(t, x, y):
         d = dict(t)
         nvars = len(t[0][0])        
         if nvars == 1:
-            return Poly.from_dict(d, x)
+            return Poly.from_dict(d, x, domain='QQ')
         elif nvars == 2:
-            return Poly.from_dict(d, x, y)
+            return Poly.from_dict(d, x, y, domain='QQ')
         else:
             raise ValueError("Expected univariate or bivariate expression")
 
@@ -860,7 +865,7 @@ if __name__ == '__main__':
 
     w = Ite(LE(x, y), Plus(x,y), Real(1))
 
-    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
+    queries = [] #[LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
     
     mpwmi = MP2WMI(f, w, n_processes=3)
 
