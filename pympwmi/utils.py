@@ -729,22 +729,22 @@ def ordered_variables(expr):
 
 def dict_to_tuple(d):
     if d == {}:
-        return ((((), symReal(0))))
+        return [(((), symReal(0)))]
 
     t = list(d.keys())
     assert len(t[0]) < 3, f"t[0] = {t[0]} should not happen"
     if len(t[0]) == 1:
-        return (tuple(sorted(
+        return [tuple(sorted(
             (tuple((k, v)) for k, v in d.items()), key=lambda p: p[0][0]
-        )))
+        ))]
     elif len(t[0]) == 2:
-        return (tuple(sorted(
+        return [tuple(sorted(
             (tuple((k, v)) for k, v in d.items()),
             key=lambda p: (p[0][0], p[0][1])
         )), tuple(sorted(
             (tuple(((k[1], k[0]), v)) for k, v in d.items()),
             key=lambda p: (p[0][0], p[0][1])
-        )))
+        ))]
 
 
 def safeexp(x):
