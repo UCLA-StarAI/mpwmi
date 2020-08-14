@@ -401,10 +401,6 @@ class MPWMI:
         x : object
             A string/sympy expression representing the integration variable
         """
-        print("vars:",x,y,)
-        print("\n".join(map(str,integrand)))
-        print("---")
-
         res = 0
         #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
         #logger.debug(f"\t\t\t\tlen(integrand): {len(integrand)} --- y: {y}")
@@ -438,7 +434,6 @@ class MPWMI:
                           (bds_ks[1], p_ks[0])]
                 if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
                     # retrieve the whole integration
-                    print("full hit!")
                     self.cache_hit[True] += 1
                     symintegral = self.cache[(bds_ks[0], bds_ks[1], p_ks[0])]
                     symintegral = symintegral.subs(symintegral.gens[0], symy)
@@ -453,11 +448,9 @@ class MPWMI:
                             terms.append(None)
 
                     if None not in terms:
-                        print("partial hit!")
                         self.cache_hit[True] += 1
                     else:
                         if p_ks[0] in self.cache:  # retrieve anti-derivative
-                            print("anti hit!")
                             self.cache_hit[True] += 1
                             antidrv = self.cache[p_ks[0]]
                             antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
@@ -489,8 +482,6 @@ class MPWMI:
 
             res += symintegral
             #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
-        print("RESULT:", res)
-        print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         return res
 
     # TODO: document and refactor this
