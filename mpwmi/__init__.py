@@ -6,7 +6,7 @@
 import logging
 from sys import stdout
 
-logger = logging.getLogger("pympwmi")
+logger = logging.getLogger("mpwmi")
 stream_handler = logging.StreamHandler(stdout)
 logger.addHandler(stream_handler)
 
@@ -24,5 +24,6 @@ def set_logger_file(path):
     logger.addHandler(file_handler)
 
 # MAIN CLASS    
-from pympwmi.mpwmi import MPWMI
-from pympwmi.utils import weight_to_lit_potentials    
+from mpwmi.mpwmi import MPWMI
+from mpwmi.mp2wmi import MP2WMI
+from mpwmi.utils import weight_to_lit_potentials    

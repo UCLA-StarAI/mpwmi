@@ -2,8 +2,8 @@ from collections import defaultdict
 from fractions import Fraction
 from typing import List, Dict
 
-from pympwmi import logger
-from pympwmi.sympysmt import pysmt2sympy
+from mpwmi import logger
+from mpwmi.sympysmt import pysmt2sympy
 
 from pysmt.fnode import FNode
 from pysmt.operators import POW
@@ -319,7 +319,6 @@ def get_coefficients(atom: FNode):
     :return: dict with keys as variable symbol and values as coefficient in atom
     """
     variables = list(get_real_variables(atom))
-    from collections import defaultdict
     coefficients = defaultdict(int)
 
     if len(variables) == 0:

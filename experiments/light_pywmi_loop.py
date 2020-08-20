@@ -9,7 +9,7 @@ from pysmt.shortcuts import Bool
 from pywmi import Density
 from wmipa import WMI
 from pywmi import XsddEngine, PyXaddAlgebra
-from pympwmi import MPWMI
+from mpwmi import MPWMI, MP2WMI
 
 #
 # seed number
@@ -181,6 +181,19 @@ if __name__ == "__main__":
             t1 = time.perf_counter()
             logging.info("About to start mpwmi solver")
             mpmi = MPWMI(density.support, density.weight, smt_solver=args.smt_solver)
+            logging.info("Solver inited")
+            Z, _ = mpmi.compute_volumes(cache=True)
+            logging.info("Volume computed")
+            t2 = time.perf_counter()
+
+        if args.solver.startswith("mp2wmi"): # should be "mp2wmi-NPROC"
+            nproc = int(args.solver.partition("-")[-1])
+            logging.info(f"using multiprocessing mpwmi with {nproc} processes")
+            # mpwmi
+            t1 = time.perf_counter()
+            logging.info("About to start mpwmi solver")
+            mpmi = MP2WMI(density.support, density.weight, smt_solver=args.smt_solver,
+                         n_processes=nproc)
             logging.info("Solver inited")
             Z, _ = mpmi.compute_volumes(cache=True)
             logging.info("Volume computed")
