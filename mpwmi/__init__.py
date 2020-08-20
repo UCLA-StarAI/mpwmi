@@ -25,4 +25,5 @@ def set_logger_file(path):
 
 # MAIN CLASS    
 from mpwmi.mpwmi import MPWMI
+from mpwmi.mp2wmi import MP2WMI
 from mpwmi.utils import weight_to_lit_potentials    
