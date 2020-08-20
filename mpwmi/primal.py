@@ -1,9 +1,9 @@
 
 import networkx as nx
-from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
+from mpwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
 from pysmt.shortcuts import *
-from pympwmi import logger
-from pympwmi.sympysmt import sympy2pysmt
+from mpwmi import logger
+from mpwmi.sympysmt import sympy2pysmt
 
 
 MSG_NOT_CNF = "the formula must be in CNF"

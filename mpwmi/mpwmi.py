@@ -5,9 +5,9 @@ from networkx.algorithms.components import connected_components
 import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 
-from pympwmi import logger
-from pympwmi.primal import PrimalGraph
-from pympwmi.utils import *
+from mpwmi import logger
+from mpwmi.primal import PrimalGraph
+from mpwmi.utils import *
 from sympy import integrate as symbolic_integral, Poly
 from sympy import sympify
 from sympy.core.mul import Mul as symbolic_mul
@@ -56,11 +56,11 @@ class MPWMI:
         weight : pysmt.FNode instance
             Polynomial potentials attached to literal values
         rand_gen : np.random.RandomState instance, optional
-            The random number generator (default: RandomState(pympwmi.RAND_SEED))
+            The random number generator (default: RandomState(mpwmi.RAND_SEED))
         """
 
         if rand_gen is None:
-            from pympwmi.utils import RAND_SEED
+            from mpwmi.utils import RAND_SEED
             rand_gen = np.random.RandomState(RAND_SEED)
 
         self.rand_gen = rand_gen
@@ -700,7 +700,7 @@ class MPWMI:
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
-    from pympwmi import set_logger_debug
+    from mpwmi import set_logger_debug
     from sys import argv
     from wmipa import WMI
 
