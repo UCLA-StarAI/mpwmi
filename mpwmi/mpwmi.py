@@ -47,7 +47,7 @@ class MPWMI:
         of uni/bivariate literals in 'queries'.
     """
 
-    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=1.49e-8):
+    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0): #tolerance=1.49e-8):
         """
         Parameters
         ----------
