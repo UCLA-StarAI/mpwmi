@@ -1,9 +1,8 @@
 
 import networkx as nx
-from mpwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
+from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
 from pysmt.shortcuts import *
-from mpwmi import logger
-from mpwmi.sympysmt import sympy2pysmt
+from pympwmi.sympysmt import sympy2pysmt
 
 
 MSG_NOT_CNF = "the formula must be in CNF"
@@ -137,7 +136,6 @@ class PrimalGraph:
         """
 
         # collect vars in the clause to later add "clause edges"
-        #logger.debug(f"add clause: {serialize(clause)}")
         cvars = set()
         if is_literal(clause):
             cvars = set(map(lambda var: var.symbol_name(),

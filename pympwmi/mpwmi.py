@@ -5,9 +5,8 @@ from networkx.algorithms.components import connected_components
 import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 
-from mpwmi import logger
-from mpwmi.primal import PrimalGraph
-from mpwmi.utils import *
+from pympwmi.primal import PrimalGraph
+from pympwmi.utils import *
 from sympy import integrate as symbolic_integral, Poly
 from sympy import sympify
 from sympy.core.mul import Mul as symbolic_mul
@@ -15,10 +14,10 @@ from sympy.core.symbol import Symbol as symvar
 
 
 class MPWMI:
-    """
-    A class that implements the Message Passing Model Integration exact
-    inference algorithm. Works with SMT-LRA formula in CNF that have a
-    forest-shaped primal graph, raises NotImplementedError otherwise.
+    """A class that implements the Message Passing Weighted Model
+    Integration exact inference algorithm. Works with SMT-LRA formula
+    in CNF that have a forest-shaped primal graph, raises
+    NotImplementedError otherwise.
 
     The weight expression has to be:
         Times(Ite(lit_1, w_1, Real(1)), ..., Ite(lit_n, w_n, Real(1)))
@@ -45,6 +44,7 @@ class MPWMI:
     compute_volumes(queries=None, evidence=None, cache=False)
         Computes the partition function value and the unnormalized probabilities
         of uni/bivariate literals in 'queries'.
+
     """
 
     def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0): #tolerance=1.49e-8):
@@ -60,7 +60,7 @@ class MPWMI:
         """
 
         if rand_gen is None:
-            from mpwmi.utils import RAND_SEED
+            from pympwmi.utils import RAND_SEED
             rand_gen = np.random.RandomState(RAND_SEED)
 
         self.rand_gen = rand_gen
@@ -68,9 +68,6 @@ class MPWMI:
         self.tolerance = tolerance
 
         self.primal = PrimalGraph(formula, weight)
-        #logger.debug(f"primal potentials: {nx.get_edge_attributes(self.primal.G, 'potentials')}")
-        #logger.debug(f"primal clauses: {nx.get_edge_attributes(self.primal.G, 'clauses')}")
-
         self.marginals = dict()
         self.cache = None
         self.cache_hit = None
@@ -242,14 +239,11 @@ class MPWMI:
                 parent = parents[0]
                 self._send_message(n, parent, evidence=evidence)
 
-        #logger.debug("\t\tBottom-up pass done")
-
         # top-down pass
         exec_order.reverse()
         for n in exec_order:
             for child in topdown.neighbors(n):
                 self._send_message(n, child, evidence=evidence)
-        #logger.debug("\t\tTop-down pass done")
 
     def _basecase_msg(self, x):
         """
@@ -281,7 +275,6 @@ class MPWMI:
         """
         assert((x, y) in self.primal.edges())
 
-        #logger.debug("\t\t\tcompute_message ({x},{y})")
         # gather previously received messages
         if self.primal.G.degree[x] == 1:
             new_integrand = self._basecase_msg(x)
@@ -402,15 +395,12 @@ class MPWMI:
             A string/sympy expression representing the integration variable
         """
         res = 0
-        #logger.debug(f"\t\t\t\tpiecewise_symbolic_integral")
-        #logger.debug(f"\t\t\t\tlen(integrand): {len(integrand)} --- y: {y}")
         for l, u, p in integrand:
             symx = symvar(x)
             symy = symvar(y) if y else symvar("aux_y")
 
             syml = Poly(to_sympy(l), symy, domain="QQ")
             symu = Poly(to_sympy(u), symy, domain="QQ")
-            #logger.debug(f"\t\t\t\t\tl: {l} --- u: {u} --- p: {p}")
             if type(p) != Poly:
                 symp = Poly(to_sympy(p), symx, domain="QQ")
             else:
@@ -481,7 +471,7 @@ class MPWMI:
                               antidrv.eval({symx: syml.as_expr()})
 
             res += symintegral
-            #logger.debug(f"\t\t\t\t\tsymintegral: {symintegral}")
+
         return res
 
     # TODO: document and refactor this
@@ -619,7 +609,7 @@ class MPWMI:
                 n_factors -= 1
 
             else:
-                assert(factors[msgid] is None), f"fuck {factors[msgid]}"
+                assert(factors[msgid] is None)
                 factors[msgid] = sympify(f)
                 l = x
                 n_factors += 1
@@ -699,11 +689,8 @@ class MPWMI:
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
-    from mpwmi import set_logger_debug
     from sys import argv
     from wmipa import WMI
-
-    set_logger_debug()
 
     w = Symbol("w", REAL)
     x = Symbol("x", REAL)

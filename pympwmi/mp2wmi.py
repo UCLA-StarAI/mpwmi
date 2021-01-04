@@ -8,9 +8,8 @@ import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 from pysmt.environment import get_env, push_env
 
-from mpwmi import logger
-from mpwmi.primal import PrimalGraph
-from mpwmi.utils import *
+from pympwmi.primal import PrimalGraph
+from pympwmi.utils import *
 from sympy import integrate as symbolic_integral, Poly
 from sympy import sympify
 from sympy.core.mul import Mul as symbolic_mul
@@ -20,10 +19,10 @@ from sympy.polys.fields import FracElement
 
 
 class MP2WMI:
-    """
-    A class that implements the Message Passing Model Integration exact
-    inference algorithm. Works with SMT-LRA formula in CNF that have a
-    forest-shaped primal graph, raises NotImplementedError otherwise.
+    """A class that implements the Message Passing Weighted Model
+    Integration exact inference algorithm. Works with SMT-LRA formula
+    in CNF that have a forest-shaped primal graph, raises
+    NotImplementedError otherwise.
 
     The weight expression has to be:
         Times(Ite(lit_1, w_1, Real(1)), ..., Ite(lit_n, w_n, Real(1)))
@@ -50,6 +49,7 @@ class MP2WMI:
     compute_volumes(queries=None, evidence=None, cache=False)
         Computes the partition function value and the unnormalized probabilities
         of uni/bivariate literals in 'queries'.
+
     """
 
     def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0, #tolerance=1.49e-8,
@@ -66,7 +66,7 @@ class MP2WMI:
         """
 
         if rand_gen is None:
-            from mpwmi.utils import RAND_SEED
+            from pympwmi.utils import RAND_SEED
             rand_gen = np.random.RandomState(RAND_SEED)
 
         self.rand_gen = rand_gen
@@ -74,8 +74,6 @@ class MP2WMI:
         self.tolerance = tolerance
 
         self.primal = PrimalGraph(formula, weight)
-        #logger.debug(f"primal potentials: {nx.get_edge_attributes(self.primal.G, 'potentials')}")
-        #logger.debug(f"primal clauses: {nx.get_edge_attributes(self.primal.G, 'clauses')}")
 
         self.marginals = dict()
         self.cache = None
@@ -96,7 +94,7 @@ class MP2WMI:
         Parameters
         ----------
         queries : list of pysmt.FNode instances (optional)
-            Uni/bivariate literals
+            Uni/bivariate literals, default: None
         evidence : iterable of pysmt.FNode instances (optional)
             Uni/bivariate clauses, default: None
         cache : bool (optional)
@@ -315,7 +313,6 @@ class MP2WMI:
                     cache_hit[True] += ch[True]
                     cache_hit[False] += ch[False]
 
-        #logger.debug("\t\tBottom-up pass done")
 
         # top-down pass
         exec_order.reverse()
@@ -328,7 +325,6 @@ class MP2WMI:
                     cache_hit[True] += ch[True]
                     cache_hit[False] += ch[False]
 
-        #logger.debug("\t\tTop-down pass done")
         return marginals, cache_hit
 
     @staticmethod
@@ -344,7 +340,6 @@ class MP2WMI:
 
         assert(primal.G.degree[x] <= 1)
         intervals = domains_to_intervals(primal.get_univariate_formula(x))
-        # cacca one = Poly(1, symvar(x),  domain="QQ")
         one = Poly(1, symvar(x), symvar("aux_y"), domain="QQ")
         return list(map(lambda i: (i[0], i[1], one), intervals))
 
@@ -365,10 +360,9 @@ class MP2WMI:
         """
         assert((x, y) in primal.edges())
 
-        #logger.debug("\t\t\tcompute_message ({x},{y})")
         # gather previously received messages
         if primal.G.degree[x] == 1:
-            new_integrand = MP2WMI._basecase_msg(primal, x)
+            new_integrand = MP2WMI._basecase_msg(primal, x) # leaf
         else:
             # aggregate msgs not coming from the recipient
             aggr = [marginals[x][z] for z in marginals[x] if z != y]
@@ -630,7 +624,6 @@ class MP2WMI:
     def _parse_potentials(potentials, xvar, subs=None):
         msgs = []
         symx = symvar(str(xvar))
-        # cacca one = Poly(1, symx, domain="QQ")
         one = Poly(1, symx, symvar("aux_y"), domain="QQ")
         for lit, f in potentials:
             msg = []
@@ -829,11 +822,9 @@ class MP2WMI:
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
-    from mpwmi import set_logger_debug
     from sys import argv
     from wmipa import WMI
 
-    set_logger_debug()
 
     w = Symbol("w", REAL)
     x = Symbol("x", REAL)

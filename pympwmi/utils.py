@@ -2,8 +2,7 @@ from collections import defaultdict
 from fractions import Fraction
 from typing import List, Dict
 
-from mpwmi import logger
-from mpwmi.sympysmt import pysmt2sympy
+from pympwmi.sympysmt import pysmt2sympy
 
 from pysmt.fnode import FNode
 from pysmt.operators import POW
