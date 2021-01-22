@@ -1,30 +1,33 @@
 
 import networkx as nx
-from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
+from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, to_sympy
 from pysmt.shortcuts import *
 from pympwmi.sympysmt import sympy2pysmt
+
 
 
 MSG_NOT_CNF = "the formula must be in CNF"
 MSG_NOT_CLAUSE = "the formula must be a clause"
 
-class PrimalGraph:
+class LogPrimalGraph:
     """
     A class that implements the primal graph construction from a SMT-LRA 
-    'formula' and a 'weight' mapping literals to polynomials.
+    'formula' and a 'weight' mapping literals to log-polynomials.
 
     Raises NotImplementedError if 'formula':
     - is not in CNF
     - contains clauses of ariety > 2
 
     Raises NotImplementedError if 'weight':
-    - does not map literals to polynomials
+    - does not map literals to log-polynomials
     - contains literals of ariety > 2
 
     Attributes
     ----------
     G : networkx.Graph instance
         The structure of the primal graph
+    nvars : int
+        The total number of variables in the original problem
 
     Methods
     -------
@@ -47,32 +50,43 @@ class PrimalGraph:
         ----------
         formula : pysmt.FNode instance
             The input formula representing the support of the distribution
-        weight : pysmt.FNode instance
-            Polynomial potentials attached to literal values
+        weight : list(pysmt.FNode, sympy.Mul)
+            List of log-polynomial potentials attached to literal values.
+            Each potential is k*exp(p(x)) where p(x) is linear, i.e.:
+                p(x) = a1 * x1 + ... + an * xn
+
+            Each weight is represented as:
+                tuple(float(k), numpy.array([a1,..,an]))
+            
         """
 
         if formula is not None and weight is not None:
 
-            variables = set(formula.get_free_variables()).union(
-                weight.get_free_variables())
+            variables = set(formula.get_free_variables())
+            self.nvars = len(variables)
 
             # TODO: remove *flipping negated literals*
             formula = flip_negated_literals_cnf(simplify(formula))
-            potentials = weight_to_lit_potentials(weight)
+
+            potentials = {}
+            for lit, w in weight:
+                assert(sum(c != 0 for c in w[1]) <= 2)
+                smt_vars = list(lit.get_free_variables())
+                variables.union(smt_vars)
+                str_vars = tuple(sorted(map(lambda x: x.symbol_name(), smt_vars)))
+
+                if str_vars not in potentials:
+                    potentials[str_vars] = []
+
+                # TODO: automated conversion sympy -> numpy data structures
+                potentials[str_vars].append((flip_negated_literals_cnf(lit), w))
 
             # ariety assumption
             assert(all(len(dom) in [1,2] for dom in potentials))
 
-            # TODO: remove *flipping negated literals*
-            def flip_potential_pair(lw):
-                return (flip_negated_literals_cnf(lw[0]), lw[1])
-
-            for vs, vs_potentials in potentials.items():
-                potentials[vs] = list(map(flip_potential_pair, vs_potentials))
-
             # initializing the nodes
             self.G = nx.Graph()
-            for var in variables:
+            for ivar, var in enumerate(variables):
                 varname = var.symbol_name()
 
                 if (varname,) in potentials:
@@ -83,6 +97,7 @@ class PrimalGraph:
                 # using str as node type
                 self.G.add_node(varname,
                                 var=var,
+                                index=ivar,
                                 clauses=set(),
                                 potentials=varp)
 
@@ -124,7 +139,7 @@ class PrimalGraph:
 
     def _add_clause(self, clause):
         """
-        Private method. Add 'clause' to PrimalGraph.
+        Private method. Add 'clause' to LogPrimalGraph.
         Raises NotImplementedError if 'clause':
         - is not a literal or a disjunction of literals
         - has ariety > 2 (TODO: this limitation should be lifted)
@@ -210,6 +225,8 @@ class PrimalGraph:
                    [bicl for e in self.G.edges for bicl in self.G.edges[e]['clauses']])
 
     def get_wmi_problem(self):
+        # TODO
+        raise NotImplementedError
         all_potentials = []
         for x in self.G.nodes: all_potentials.extend(self.G.nodes[x]['potentials'])
         for e in self.G.edges: all_potentials.extend(self.G.edges[e]['potentials'])
@@ -221,10 +238,10 @@ class PrimalGraph:
             weight = Real(1)
 
         return formula, weight
-                    
 
     def subprimal(self, subvars):
         assert(all(v in self.G.nodes for v in subvars))
-        subp = PrimalGraph(None, None)
+        subp = LogPrimalGraph(None, None)
         subp.G = self.G.subgraph(subvars)
+        subp.nvars = self.nvars
         return subp

@@ -395,7 +395,15 @@ class MPWMI:
             A string/sympy expression representing the integration variable
         """
         res = 0
+        print("INTEGRATING",x)
+        print()
         for l, u, p in integrand:
+
+            print(f"{type(l)} LOW:", l)
+            print(f"{type(u)} UP:", u)
+            print(f"{type(p)} INTEGRAND:", p)
+            print("---")
+            
             symx = symvar(x)
             symy = symvar(y) if y else symvar("aux_y")
 
@@ -470,57 +478,12 @@ class MPWMI:
                 symintegral = antidrv.eval({symx: symu.as_expr()}) - \
                               antidrv.eval({symx: syml.as_expr()})
 
+            print("RESULT:", symintegral)
+            print("====")
             res += symintegral
 
         return res
 
-    # TODO: document and refactor this
-    @staticmethod
-    def _account_for_potential(piecewise_integral, literal, f):
-        """
-        Accounts for a potential 'f' associated with the univariate
-        'literal', returning a modified 'piecewise_integral'.
-
-        Parameters
-        ----------
-        piecewise_integral : list
-            The input pw integral [(lower, upper, polynomial)] over x
-        literal : pysmt.FNode
-            The univariate literal on x
-        f : pysmt.FNode instance
-            The polynomial potential associated to 'literal' being True
-        """
-
-        assert (is_literal(literal))
-
-        var, k, is_lower, k_included = parse_univariate_literal(literal)
-        new_msg = []
-
-        fsym = to_sympy(f)
-
-        for piece in piecewise_integral:
-            l, u, p = piece
-            assert (l != u), f"degenerate interval: [{l}, {u}]!!!!!"
-            if (is_lower and k >= u) or (not is_lower and k <= l):
-                # no intersection
-                new_msg.append(piece)
-
-            else:
-                if k > l and k < u:
-                    # k in ]l,u[
-                    # the piece must be split
-                    if is_lower:
-                        new_msg.append((l, k, p))
-                        new_msg.append((k, u, symbolic_mul(p, fsym)))
-
-                    else:
-                        new_msg.append((l, k, symbolic_mul(p, fsym)))
-                        new_msg.append((k, u, p))
-
-                else:
-                    new_msg.append((l, u, symbolic_mul(p, fsym)))
-
-        return new_msg
 
     @staticmethod
     def _parse_potentials(potentials, xvar, subs=None):
@@ -542,49 +505,6 @@ class MPWMI:
             msgs.append(msg)
         return msgs
 
-    @staticmethod
-    def _account_for_edge_potential(piecewise_integral,
-                                    literal,
-                                    f,
-                                    xvar,
-                                    yvar,
-                                    yval):
-        assert (is_literal(literal))
-
-        ksym, is_lower, k_included = literal_to_bounds(literal)[xvar]
-        fsym = to_sympy(f)
-        k = simplify(substitute(ksym, {yvar: Real(yval)}))
-        k = k.constant_value()
-
-        new_msg = []
-        for piece in piecewise_integral:
-            lsym, usym, p = piece
-            p = sympify(p)
-            l = simplify(substitute(lsym, {yvar: Real(yval)}))
-            l = l.constant_value()
-            u = simplify(substitute(usym, {yvar: Real(yval)}))
-            u = u.constant_value()
-            assert (l != u), f"degenerate interval: [{l}, {u}]!!!!!"
-            if (is_lower and k >= u) or (not is_lower and k <= l):
-                # no intersection
-                new_msg.append(piece)
-
-            else:
-                if k > l and k < u:
-                    # k in ]l,u[
-                    # the piece must be split
-                    if is_lower:
-                        new_msg.append((lsym, ksym, p))
-                        new_msg.append((ksym, usym, symbolic_mul(p, fsym)))
-
-                    else:
-                        new_msg.append((lsym, ksym, symbolic_mul(p, fsym)))
-                        new_msg.append((ksym, usym, p))
-
-                else:
-                    new_msg.append((lsym, usym, symbolic_mul(p, fsym)))
-
-        return new_msg
 
     # TODO: document and refactor this
     @staticmethod
