@@ -1,6 +1,7 @@
 
 from functools import reduce
 from itertools import product
+from math import e as numexp
 from pysmt.shortcuts import simplify, substitute
 from pysmt.fnode import FNode
 
@@ -324,9 +325,19 @@ class NumMessage:
     ONE = {(0,0) : PONE}
 
     @staticmethod
+    def reverse(f):
+        return {(j,i) : {(l,k) : f[(i,j)][(k,l)] for k,l in f[(i,j)]}
+                for i,j in f}
+
+    @staticmethod
+    def is_univariate(f):
+        return all([(E[1] == 0) and all([(e[1] == 0) for e in p])
+                    for E,p in f.items()])
+
+    @staticmethod
     def polysum(p1, p2):
         psum = {}
-        for P in set(p1.keys()).union(set(p2.keys)):
+        for P in set(p1.keys()).union(set(p2.keys())):
             newk = p1.get(P, 0.0) + p2.get(P, 0.0)
             if newk != 0.0:
                 psum[P] = newk
@@ -338,30 +349,43 @@ class NumMessage:
         pprod = {}
         for e1, e2 in product(p1.keys(), p2.keys()):
             eprod = (e1[0]+e2[0], e1[1]+e2[1])
-            pprod[eprod] = pprod.get(eprod, 1.0) * p1[e1] * p2[e2]
+            pprod[eprod] = pprod.get(eprod, 0.0) + p1[e1] * p2[e2]
 
         return pprod
 
     @staticmethod
-    def polysub(p, s, i):
+    def polysub(p, s):
         psub = {}
         for e in p:
-            if e[i] == 0:
+            if e[0] == 0:
                 psub[e] = p[e]
             else:
                 if s[0] != 0:
-                    newe = (e[0]+e[1], 0) if bool(i) else (0, e[0]+e[1])
-                    newk = p.get(newe, 0.0) + p[e] * (s[0]**e[i])
+                    newe = (0, e[0]+e[1])
+                    newk = p.get(newe, 0.0) + p[e] * (s[0]**e[0])
                     if newk != 0:
                         psub[newe] = newk
 
                 if s[1] != 0:
-                    newe = (e[0], 0) if bool(i) else (0, e[1])
-                    newk = p.get(newe, 0.0) + p[e] * (s[1]**e[i])
+                    newe = (0, e[1])
+                    newk = p.get(newe, 0.0) + p[e] * (s[1]**e[0])
                     if newk != 0:
                         psub[newe] = newk
 
         return psub
+
+    @staticmethod
+    def polyantider(p):
+        panti = {}
+        for e in p:
+            panti[(e[0]+1, e[1])] = p[e] / (e[0]+1)
+
+        return panti
+
+    
+    @staticmethod
+    def polypart(p, k):
+        pass # TODO
 
     @staticmethod
     def minus(f):
@@ -370,8 +394,8 @@ class NumMessage:
     @staticmethod
     def sum(f1, f2):
         fsum = {}
-        for E in set(f1.keys()).union(set(f2.keys)):
-            newpoly = NumMessage.polysum(f1.get(E, {}), p2.get(E, {}))
+        for E in set(f1.keys()).union(set(f2.keys())):
+            newpoly = NumMessage.polysum(f1.get(E, {}), f2.get(E, {}))
             if len(newpoly) > 0:
                 fsum[E] = newpoly
 
@@ -382,18 +406,63 @@ class NumMessage:
         fprod = {}
         for E1, E2 in product(f1.keys(), f2.keys()):
             Eprod = (E1[0]+E2[0], E1[1]+E2[1])
-            newpoly = NumMessage.polyprod(p1[e1], p2[e2])
+
+            newpoly = NumMessage.polyprod(f1[E1], f2[E2])
             if Eprod not in fprod:
                 fprod[Eprod] = newpoly
             else:
-                fprod[Eprod] = NumMessage.polyprod(fprod[Eprod], newpoly)
+                fprod[Eprod] = NumMessage.polysum(fprod[Eprod], newpoly)
 
         return fprod
 
+    @staticmethod
+    def substitute(f, s):
+        fsub = {}
+        for E in f:
+            newp = NumMessage.polysub(f[E], s)
+            if E[0] == 0:
+                newE = E
+            else:
+                newE = (0, E[1]+E[0]*s[0])
+                newK = numexp ** (E[0]*s[1])
+                newp[(0,0)] = newp.get((0,0), 1.0) * newK
+
+            if newE not in fsub:
+                fsub[newE] = newp
+            else:
+                fsub[newE] = NumMessage.polysum(fsub[newE], newp)
+
+        return fsub
+
+    @staticmethod
+    def antiderivative(f):
+        fanti = {}
+        
+        for E in f:
+            if E[0] == 0:
+                fanti[E] = NumMessage.polyantider(f[E])
+            else:
+                fanti[E] = NumMessage.polypart(f[E], E[0])
+
+        return fanti
 
 
 if __name__ == '__main__':
-    from sympy import *
+    from sympy import symbols, exp
+
+    f1 = {(0,0) : {(0,0) : 2}}
+
+    f2 = {(3,0) : {(0,0) : 2}}
+
+    f3 = {(3,5) : {(0,0) : 2}}
+
+    f4 = {(0,0) : {(1,0) : 3, (0,1) : 5}}
+
+    f5 = {(1,0) : {(1,0) : 3, (0,0): 7}}
+    
+    f6 = {(0,1) : {(0,1) : 5, (0,0): 11}}
+    
+    fs = [f5, f6]#[f1, f2, f3, f4]
 
     def convert(f):
         x, y = symbols("x y")
@@ -407,3 +476,22 @@ if __name__ == '__main__':
             sym = sym + sympoly * symexp
 
         return sym
+
+    
+
+    for i,f in enumerate(fs):
+        print(i, ":", f, "-->", convert(f))
+
+    print("==========")
+
+    for i in range(len(fs)):
+        for j in range(i, len(fs)):            
+            fsum = NumMessage.sum(fs[i],fs[j])
+            print(f"({i}+{j}) :", fsum, "-->", convert(fsum))
+
+    print("==========")
+
+    for i in range(len(fs)):
+        for j in range(i, len(fs)):
+            fprod = NumMessage.product(fs[i],fs[j])
+            print(f"({i}*{j}) :", fprod, "-->", convert(fprod))
