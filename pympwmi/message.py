@@ -150,13 +150,9 @@ class Message:
             if cache is not None:  # for cache = True
                 integral = cls.integrate_cache(cache, cache_hit, l, u, p, x, y)
             else:  # for cache = False
-                antidrv = p.integrate(x)
-                lower = Poly(antidrv.as_expr(), x,
-                             domain=f'QQ[{y}]').eval({x: l.as_expr()})
-                lower = Poly(lower.as_expr(), x, y, domain="QQ")
-                upper = Poly(antidrv.as_expr(), x,
-                             domain=f'QQ[{y}]').eval({x: u.as_expr()})
-                upper = Poly(upper.as_expr(), x, y, domain="QQ")
+                antidrv = cls.antiderivative(p, x)
+                lower = cls.substitute(antidrv, x, y, l)
+                upper = cls.substitute(antidrv, x, y, u)
                 integral = upper - lower
 
             res += integral
@@ -201,6 +197,17 @@ class SympyMessage(Message):
             p = Poly(p.as_expr(), x, y, domain="QQ")
 
         return l, u, p
+
+
+    @staticmethod
+    def antiderivative(f, var):
+        return f.integrate(var)
+
+    @staticmethod
+    def substitute(f, x, y, sub):
+        f2 = Poly(f.as_expr(), x,
+                     domain=f'QQ[{y}]').eval({x: sub.as_expr()})
+        return Poly(f2.as_expr(), x, y, domain="QQ")
 
     @classmethod
     def integrate_cache(cls, cache, cache_hit, l, u, p, x, y):
@@ -251,20 +258,16 @@ class SympyMessage(Message):
 
                 else:
                     cache_hit[False] += 1
-                    antidrv = p.integrate(x)
+                    antidrv = cls.antiderivative(p, x)
                     cache[k_anti] = cls.to_cache(antidrv)
 
                 # cache partial integration terms
                 if terms[0] is None:
-                    terms[0] = Poly(antidrv.as_expr(), x,
-                                    domain=f'QQ[{y}]').eval({x: l.as_expr()})
-                    terms[0] = Poly(terms[0].as_expr(), x, y, domain="QQ")
+                    terms[0] = cls.substitute(antidrv, x, y, l)
                     cache[k_part_l] = cls.to_cache(terms[0])
 
                 if terms[1] is None:
-                    terms[1] = Poly(antidrv.as_expr(), x,
-                                    domain=f'QQ[{y}]').eval({x: u.as_expr()})
-                    terms[1] = Poly(terms[1].as_expr(), x, y, domain="QQ")
+                    terms[1] = cls.substitute(antidrv, x, y, u)
                     cache[k_part_u] = cls.to_cache(terms[1])
 
             integral = terms[1] - terms[0]
@@ -382,10 +385,27 @@ class NumMessage:
 
         return panti
 
+    @staticmethod
+    def polyder(p):
+        pder = {}
+        for e in p:
+            if e[0] > 0:                
+                pder[(e[0]-1, e[1])] = p[e] * e[0]
+
+        return pder
+
     
     @staticmethod
     def polypart(p, k):
-        pass # TODO
+        p2 = {pe : pk/k for pe,pk in p.items()}
+        pder = NumMessage.polyder(p2)
+        if pder != {}:
+            p3 = NumMessage.polypart(pder, k)
+            return NumMessage.polysum(p2, NumMessage.minus(p3))
+        else:
+            return p2
+        
+
 
     @staticmethod
     def minus(f):
@@ -448,7 +468,89 @@ class NumMessage:
 
 
 if __name__ == '__main__':
-    from sympy import symbols, exp
+    from sympy import integrate, symbols, exp, simplify
+    from numpy import isclose
+
+    x, y = symbols("x y")
+    def convert(f):
+        sym = 0
+        for fe, p in f.items():
+            symexp = exp(x * fe[0] + y * fe[1])
+            sympoly = 0
+            for pe, k in p.items():
+                sympoly = sympoly + k * x**pe[0] * y**pe[1]
+
+            sym = simplify(sym + sympoly * symexp)
+
+        return sym
+
+    def test_binary(fs):
+        tests = [("sum",
+                  NumMessage.sum,
+                  lambda f1, f2 : f1+f2),
+                        
+                 ("product",
+                  NumMessage.product,
+                  lambda f1, f2 : f1*f2),
+                        
+                 ("sub",
+                  lambda f1, f2 : NumMessage.sum(f1, NumMessage.minus(f2)),
+                  lambda f1, f2 : f1-f2)]
+        
+        for label, numop, symop in tests:
+            print("========== testing", label)
+
+            for i in range(len(fs)):
+                for j in range(i, len(fs)):
+                    numres = simplify(convert(numop(fs[i], fs[j])))
+                    symres = simplify(symop(convert(fs[i]), convert(fs[j])))
+                    if numres.equals(symres):
+                        print("---", f"({i},{j})", "---","OK")
+                    else:
+                        print("---", f"({i},{j})", "---","ERROR")
+                        print(numres)
+                        print(symres)
+                        exit()
+
+
+    def test_substitute(fs):
+        for A, B in [(0, 0), (0, 7), (3, 0), (3, 7)]:
+            print(f"========== testing substitution with ({A}y + {B})")
+            for i in range(len(fs)):
+                numres = simplify(convert(NumMessage.substitute(fs[i], (A, B))))
+                symres = simplify(convert(fs[i]).subs({x: (A*y + B)}))
+
+                d1 = float(numres.subs({y : 0})) - float(symres.subs({y : 0}))
+                d2 = float(numres.subs({y : 1})) - float(symres.subs({y : 1}))
+                if isclose(d1, 0) and isclose(d2, 0):
+                    print("---", f"{i}", "---","OK")
+                else:
+                    print("---", f"{i}", "---","ERROR")
+                    print(numres)
+                    print(symres)
+
+                    print("d1", d1)
+                    print("d2", d2)
+                    #exit()
+
+    def test_antiderivative(fs):
+
+        print("========== testing antiderivative")
+        for i in range(len(fs)):
+            numres = simplify(convert(NumMessage.antiderivative(fs[i])))
+            symres = simplify(integrate(convert(fs[i]), f))
+
+            if numres.equals(symres):
+                print("---", f"{i}", "---","OK")
+            else:
+                print("---", f"{i}", "---","ERROR")
+                print(numres)
+                print(symres)
+                #exit()
+
+
+
+
 
     f1 = {(0,0) : {(0,0) : 2}}
 
@@ -458,40 +560,16 @@ if __name__ == '__main__':
 
     f4 = {(0,0) : {(1,0) : 3, (0,1) : 5}}
 
-    f5 = {(1,0) : {(1,0) : 3, (0,0): 7}}
+    f5 = {(1,1) : {(1,0) : 3, (0,0): 7}}
     
-    f6 = {(0,1) : {(0,1) : 5, (0,0): 11}}
+    f6 = {(1,1) : {(0,1) : 5, (0,0): 11}, (0,0) : {(1,0) : 3, (0,1) : 5}}
     
-    fs = [f5, f6]#[f1, f2, f3, f4]
-
-    def convert(f):
-        x, y = symbols("x y")
-        sym = 0
-        for fe, p in f.items():
-            symexp = exp(x * fe[0] + y * fe[1])
-            sympoly = 0
-            for pe, k in p.items():
-                sympoly = sympoly + k * x**pe[0] * y**pe[1]
-
-            sym = sym + sympoly * symexp
-
-        return sym
-
-    
+    fs = [f1, f2, f3, f4, f5, f6]
 
     for i,f in enumerate(fs):
         print(i, ":", f, "-->", convert(f))
 
-    print("==========")
 
-    for i in range(len(fs)):
-        for j in range(i, len(fs)):            
-            fsum = NumMessage.sum(fs[i],fs[j])
-            print(f"({i}+{j}) :", fsum, "-->", convert(fsum))
-
-    print("==========")
-
-    for i in range(len(fs)):
-        for j in range(i, len(fs)):
-            fprod = NumMessage.product(fs[i],fs[j])
-            print(f"({i}*{j}) :", fprod, "-->", convert(fprod))
+    #test_binary(fs)
+    test_substitute(fs)
+    test_antiderivative(fs)
