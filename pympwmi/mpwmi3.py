@@ -8,7 +8,8 @@ import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 from pysmt.environment import get_env, push_env
 
-from pympwmi.message import SympyMessage as Message
+#from pympwmi.message import SympyMessage as Message
+from pympwmi.message import NumMessage as Message
 from pympwmi.primal import PrimalGraph
 from pympwmi.utils import *
 
@@ -441,6 +442,9 @@ if __name__ == '__main__':
 
     w = Times(Ite(LE(x, z), Plus(x,z), Real(1)),
               Ite(LE(y, Real(1/2)), Times(y,y), Real(1)))
+
+    w = {LE(x, z): {(0,0) : {(1,0) : 1.0, (0,1) : 1.0}}, #, Plus(x,z), Real(1)),
+         LE(y, Real(1/2)) : {(0,0) : {(2,0) : 1.0}}}#, Times(y,y), Real(1)))
 
     queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, z)]
     

@@ -2,6 +2,7 @@
 import networkx as nx
 from pympwmi.utils import flip_negated_literals_cnf, get_boolean_variables, is_literal, weight_to_lit_potentials
 from pysmt.shortcuts import *
+from pysmt.fnode import FNode
 from pympwmi.sympysmt import sympy2pysmt
 
 
@@ -52,13 +53,27 @@ class PrimalGraph:
         """
 
         if formula is not None and weight is not None:
-
-            variables = set(formula.get_free_variables()).union(
-                weight.get_free_variables())
-
             # TODO: remove *flipping negated literals*
             formula = flip_negated_literals_cnf(simplify(formula))
-            potentials = weight_to_lit_potentials(weight)
+
+            if isinstance(weight, FNode):
+                potentials = weight_to_lit_potentials(weight)
+                variables = set(formula.get_free_variables()).union(
+                    weight.get_free_variables())
+            else:
+                potentials = {}
+                for lit, w in weight.items():
+                    variables = list(lit.get_free_variables())
+                    v = tuple(sorted(map(lambda x: x.symbol_name(), variables)))
+                    assert(len(v) in [1, 2]), "Not implemented for ternary atoms"
+
+                    if v not in potentials:
+                        potentials[v] = []
+                    
+                    potentials[v].append((lit, w))
+                    
+                variables = set(formula.get_free_variables()).union(
+                    *{lit.get_free_variables() for lit in weight})
 
             # ariety assumption
             assert(all(len(dom) in [1,2] for dom in potentials))

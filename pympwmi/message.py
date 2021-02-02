@@ -16,7 +16,7 @@ from pympwmi.utils import literal_to_bounds, to_sympy
 
 class Message:
 
-    ONE = One()
+    #ONE = One()
 
     @staticmethod
     def product(x, y):
@@ -38,6 +38,8 @@ class Message:
                 msg.append((float('-inf'), k, f))
                 msg.append((k, float('inf'), cls.ONE))
             msgs.append(msg)
+
+        print("POTENTIALS TO MESSAGES:", msgs)
         return msgs
 
     @classmethod
@@ -59,6 +61,10 @@ class Message:
 
         for msgid, msg in enumerate(msgs):
             for start, end, integrand in msg:
+                print("----------")
+                print("start", start)
+                print("end", end)
+                print("integrand", integrand)
                 if type(start) == FNode:
                     start = start.constant_value()
                 if type(end) == FNode:
@@ -153,9 +159,15 @@ class Message:
                 antidrv = cls.antiderivative(p, x)
                 lower = cls.substitute(antidrv, x, y, l)
                 upper = cls.substitute(antidrv, x, y, u)
-                integral = upper - lower
+                print("p", p)
+                print("l", l)
+                print("u", u)
+                print("antidrv", antidrv)
+                print("upper", upper)
+                print("lower", lower)
+                integral = cls.substract(upper, lower)
 
-            res += integral
+            res = cls.sum(res, integral)
 
         return res, cache_hit
 
@@ -176,10 +188,6 @@ class SympyMessage(Message):
     ONE = One()
 
     @staticmethod
-    def product(x, y):
-        return x * y
-
-    @staticmethod
     def preprocess_vars(x, y):
         x = symvar(x)
         y = symvar(y) if y else symvar("aux_y")
@@ -198,6 +206,17 @@ class SympyMessage(Message):
 
         return l, u, p
 
+    @staticmethod
+    def product(x, y):
+        return x * y
+
+    @staticmethod
+    def sum(x, y):
+        return x + y
+    
+    @staticmethod
+    def subtract(x, y):
+        return x - y
 
     @staticmethod
     def antiderivative(f, var):
@@ -314,7 +333,7 @@ class SympyMessage(Message):
             raise ValueError("Expected univariate or bivariate expression")
 
 
-class NumMessage:
+class NumMessage(Message):
     """
     Encodes:
         F(x,y) = sum_i P_i(x,y) * exp(alpha_i * x + beta_i * y)
@@ -326,6 +345,25 @@ class NumMessage:
     """
     PONE = {(0,0) : 1.0}
     ONE = {(0,0) : PONE}
+
+
+    @staticmethod
+    def preprocess_vars(x, y):
+        return x, y
+
+    @staticmethod
+    def preprocess_piece(l, u, p, x, y):
+        def fnode2linear(f):
+            A, B = 0.0, 0.0
+            if f.is_constant():
+                B = f.constant_value()
+            elif f.is_plus():
+                raise NotImplementedError()
+
+
+            return (A, B)
+                
+        return fnode2linear(l), fnode2linear(u), p
 
     @staticmethod
     def reverse(f):
@@ -361,17 +399,21 @@ class NumMessage:
         psub = {}
         for e in p:
             if e[0] == 0:
-                psub[e] = p[e]
+                newk = psub.get(e, 0.0) + p[e]
+                if newk != 0:
+                    psub[e] = newk
+                else:
+                    psub.pop(e, None)
             else:
                 if s[0] != 0:
                     newe = (0, e[0]+e[1])
-                    newk = p.get(newe, 0.0) + p[e] * (s[0]**e[0])
+                    newk = psub.get(newe, 0.0) + p[e] * (s[0]**e[0])
                     if newk != 0:
                         psub[newe] = newk
 
                 if s[1] != 0:
                     newe = (0, e[1])
-                    newk = p.get(newe, 0.0) + p[e] * (s[1]**e[0])
+                    newk = psub.get(newe, 0.0) + p[e] * (s[1]**e[0])
                     if newk != 0:
                         psub[newe] = newk
 
@@ -400,8 +442,8 @@ class NumMessage:
         p2 = {pe : pk/k for pe,pk in p.items()}
         pder = NumMessage.polyder(p2)
         if pder != {}:
-            p3 = NumMessage.polypart(pder, k)
-            return NumMessage.polysum(p2, NumMessage.minus(p3))
+            p3 = {e : -k for e, k in NumMessage.polypart(pder, k).items()}
+            return NumMessage.polysum(p2, p3)
         else:
             return p2
         
@@ -422,6 +464,10 @@ class NumMessage:
         return fsum
 
     @staticmethod
+    def substract(f1, f2):
+        return NumMessage.sum(f1, NumMessage.minus(f2))
+
+    @staticmethod
     def product(f1, f2):
         fprod = {}
         for E1, E2 in product(f1.keys(), f2.keys()):
@@ -436,7 +482,7 @@ class NumMessage:
         return fprod
 
     @staticmethod
-    def substitute(f, s):
+    def substitute(f, x, y, s):
         fsub = {}
         for E in f:
             newp = NumMessage.polysub(f[E], s)
@@ -445,7 +491,7 @@ class NumMessage:
             else:
                 newE = (0, E[1]+E[0]*s[0])
                 newK = numexp ** (E[0]*s[1])
-                newp[(0,0)] = newp.get((0,0), 1.0) * newK
+                newp = {e : k * newK for e,k in newp.items()}
 
             if newE not in fsub:
                 fsub[newE] = newp
@@ -455,7 +501,7 @@ class NumMessage:
         return fsub
 
     @staticmethod
-    def antiderivative(f):
+    def antiderivative(f, x):
         fanti = {}
         
         for E in f:
@@ -508,8 +554,6 @@ if __name__ == '__main__':
                         print("---", f"({i},{j})", "---","OK")
                     else:
                         print("---", f"({i},{j})", "---","ERROR")
-                        print(numres)
-                        print(symres)
                         exit()
 
 
@@ -517,36 +561,29 @@ if __name__ == '__main__':
         for A, B in [(0, 0), (0, 7), (3, 0), (3, 7)]:
             print(f"========== testing substitution with ({A}y + {B})")
             for i in range(len(fs)):
-                numres = simplify(convert(NumMessage.substitute(fs[i], (A, B))))
+                numres = simplify(convert(NumMessage.substitute(fs[i], None, None, (A, B))))
                 symres = simplify(convert(fs[i]).subs({x: (A*y + B)}))
 
-                d1 = float(numres.subs({y : 0})) - float(symres.subs({y : 0}))
-                d2 = float(numres.subs({y : 1})) - float(symres.subs({y : 1}))
-                if isclose(d1, 0) and isclose(d2, 0):
+                numres0, symres0 = float(numres.subs({y : 0})), float(symres.subs({y : 0}))
+                numres1, symres1 = float(numres.subs({y : 1})), float(symres.subs({y : 1}))
+                if isclose(numres0, symres0) and isclose(numres1, symres1):
                     print("---", f"{i}", "---","OK")
                 else:
                     print("---", f"{i}", "---","ERROR")
-                    print(numres)
-                    print(symres)
-
-                    print("d1", d1)
-                    print("d2", d2)
-                    #exit()
+                    exit()
 
     def test_antiderivative(fs):
 
         print("========== testing antiderivative")
         for i in range(len(fs)):
-            numres = simplify(convert(NumMessage.antiderivative(fs[i])))
-            symres = simplify(integrate(convert(fs[i]), f))
+            numres = simplify(convert(NumMessage.antiderivative(fs[i], None)))
+            symres = simplify(integrate(convert(fs[i]), x))
 
             if numres.equals(symres):
                 print("---", f"{i}", "---","OK")
             else:
                 print("---", f"{i}", "---","ERROR")
-                print(numres)
-                print(symres)
-                #exit()
+                exit()
 
 
 
@@ -564,12 +601,12 @@ if __name__ == '__main__':
     
     f6 = {(1,1) : {(0,1) : 5, (0,0): 11}, (0,0) : {(1,0) : 3, (0,1) : 5}}
     
-    fs = [f1, f2, f3, f4, f5, f6]
+    fs = [f1, f2, f3, f4, f5, f6, NumMessage.product(f6,NumMessage.sum(f5,f6))]
 
     for i,f in enumerate(fs):
         print(i, ":", f, "-->", convert(f))
 
 
     #test_binary(fs)
-    test_substitute(fs)
+    #test_substitute(fs)
     test_antiderivative(fs)
