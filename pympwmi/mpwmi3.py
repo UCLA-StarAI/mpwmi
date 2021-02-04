@@ -9,7 +9,7 @@ from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 from pysmt.environment import get_env, push_env
 
 #from pympwmi.message import SympyMessage as Message
-from pympwmi.message import NumMessage as Message
+from pympwmi.message import NumMessage, SympyMessage
 from pympwmi.primal import PrimalGraph
 from pympwmi.utils import *
 
@@ -51,7 +51,7 @@ class MPWMI3:
     """
 
     def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0, #tolerance=1.49e-8,
-                 n_processes=1):
+                 n_processes=1, msgtype='symbolic'):
         """
         Parameters
         ----------
@@ -62,6 +62,11 @@ class MPWMI3:
         rand_gen : np.random.RandomState instance, optional
             The random number generator (default: RandomState(mpwmi.RAND_SEED))
         """
+
+        if msgtype == 'symbolic':
+            self.Message = SympyMessage
+        elif msgtype == 'numeric':
+            self.Message = NumMessage
 
         if rand_gen is None:
             from pympwmi.utils import RAND_SEED
@@ -130,7 +135,7 @@ class MPWMI3:
             else:
                 subevidence = [e for e in evidence
                                if set(e.get_free_symbols()).issubset(subvars)]
-            subproblems.append((subprimal, self.smt_solver, self.cache,
+            subproblems.append((self.Message, subprimal, self.smt_solver, self.cache,
                                 self.tolerance, self.rand_gen, pysmt_env, subevidence))
 
         with Pool(processes=self.n_processes) as pool:
@@ -145,10 +150,10 @@ class MPWMI3:
         Z_components = []
         for comp_vars in components:
             x = list(comp_vars)[0]
-            symbolic_marginal = Message.intersect(list(self.mailboxes[x].values()),
-                                                  self.tolerance)
+            symbolic_marginal = self.Message.intersect(list(self.mailboxes[x].values()),
+                                                       self.tolerance)
         
-            comp_Z, ch = Message.integrate(self.cache, symbolic_marginal, x)
+            comp_Z, ch = self.Message.integrate(self.cache, symbolic_marginal, x)
             if self.cache is not None:
                 self.cache_hit[True] += ch[True]
                 self.cache_hit[False] += ch[False]
@@ -167,10 +172,10 @@ class MPWMI3:
                 # MP messages + univariate query
                 msgs = list(self.mailboxes[x].values())
                 l, u = domains_to_intervals(q)[0]
-                msgs.append([(l, u, Message.ONE)])                
-                query_marginal = Message.intersect(msgs, self.tolerance)
+                msgs.append([(l, u, self.Message.ONE())])                
+                query_marginal = self.Message.intersect(msgs, self.tolerance)
                 
-                q_vol, ch = Message.integrate(self.cache, query_marginal, x)
+                q_vol, ch = self.Message.integrate(self.cache, query_marginal, x)
                 if self.cache is not None:
                     self.cache_hit[True] += ch[True]
                     self.cache_hit[False] += ch[False]
@@ -188,9 +193,10 @@ class MPWMI3:
                 y = q_vars[1].symbol_name()
 
                 # creates a new message using the query 'q' as evidence
-                q_msg, ch = MPWMI3._compute_message(self.primal, self.mailboxes,
-                                                         self.smt_solver, self.cache,
-                                                         self.tolerance, x, y, evidence=[q])
+                q_msg, ch = MPWMI3._compute_message(self.Message, self.primal,
+                                                    self.mailboxes, self.smt_solver,
+                                                    self.cache, self.tolerance,
+                                                    x, y, evidence=[q])
 
                 if self.cache is not None:
                     self.cache_hit[True] += ch[True]
@@ -198,8 +204,8 @@ class MPWMI3:
 
                 msgs =  [q_msg] + [self.mailboxes[y][z]
                                    for z in self.mailboxes[y] if z != x]
-                query_marginal = Message.intersect(msgs, self.tolerance)
-                q_vol, ch = Message.integrate(self.cache, query_marginal, y)
+                query_marginal = self.Message.intersect(msgs, self.tolerance)
+                q_vol, ch = self.Message.integrate(self.cache, query_marginal, y)
 
                 if self.cache is not None:
                     self.cache_hit[True] += ch[True]
@@ -218,7 +224,7 @@ class MPWMI3:
 
         Z = 1.0
         for Z_comp in Z_components:
-            Z *= Z_comp
+            Z *= self.Message.to_float(Z_comp)
 
         if self.cache is not None:
             # TODO: check if cache_hit index should be True or False
@@ -227,12 +233,13 @@ class MPWMI3:
                                                     self.cache_hit[True] /
                                                     sum(self.cache_hit)))
 
-        Z = float(Z.as_expr())
-        query_volumes = [float(qv.as_expr()) for qv in query_volumes]
+        #Z = float(Z.as_expr())
+        
+        query_volumes = [self.Message.to_float(qv) for qv in query_volumes]
         return Z, query_volumes
 
     @staticmethod
-    def _message_passing(primal, smt_solver, cache, tolerance,
+    def _message_passing(msgclass, primal, smt_solver, cache, tolerance,
                          rand_gen, pysmt_env, evidence=None):
         """
         Computes the symbolic piecewise integrals representing the marginal of
@@ -278,21 +285,21 @@ class MPWMI3:
         for n in exec_order:
 
             # account for univariate bounds/potentials first
-            mailboxes[n][n] = MPWMI3._basecase_msg(primal, n)
+            mailboxes[n][n] = MPWMI3._basecase_msg(msgclass, primal, n)
             if len(primal.nodes()[n]['potentials']) > 0:
-                aggr = [mailboxes[n][n]] + Message.potentials_to_messages(
+                aggr = [mailboxes[n][n]] + msgclass.potentials_to_messages(
                     primal.nodes()[n]['potentials'],
                     primal.nodes()[n]['var'])
-                mailboxes[n][n] = Message.intersect(aggr, tolerance)
+                mailboxes[n][n] = msgclass.intersect(aggr, tolerance)
             
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
             if len(parents) == 1:
                 parent = parents[0]
-                mailboxes[parent][n], ch = MPWMI3._compute_message(primal, mailboxes,
-                                                                   smt_solver, cache,
-                                                                   tolerance, n, parent,
-                                                                   evidence=evidence)
+                mailboxes[parent][n], ch = MPWMI3._compute_message(msgclass, primal,
+                                                                   mailboxes, smt_solver,
+                                                                   cache, tolerance, n,
+                                                                   parent, evidence=evidence)
                 if cache is not None:
                     cache_hit[True] += ch[True]
                     cache_hit[False] += ch[False]
@@ -302,9 +309,10 @@ class MPWMI3:
         exec_order.reverse()
         for n in exec_order:
             for child in topdown.neighbors(n):
-                mailboxes[child][n], ch = MPWMI3._compute_message(primal, mailboxes, smt_solver,
-                                                                  cache, tolerance, n, child,
-                                                                  evidence=evidence)
+                mailboxes[child][n], ch = MPWMI3._compute_message(msgclass, primal,
+                                                                  mailboxes, smt_solver,
+                                                                  cache, tolerance, n,
+                                                                  child, evidence=evidence)
                 if ch is not None:
                     cache_hit[True] += ch[True]
                     cache_hit[False] += ch[False]
@@ -312,7 +320,7 @@ class MPWMI3:
         return mailboxes, cache_hit
 
     @staticmethod
-    def _basecase_msg(primal, x):
+    def _basecase_msg(msgclass, primal, x):
         """
         Computes the piecewise integral for a leaf node.
 
@@ -324,10 +332,10 @@ class MPWMI3:
 
         #assert(primal.G.degree[x] <= 1)
         intervals = domains_to_intervals(primal.get_univariate_formula(x))
-        return list(map(lambda i: (i[0], i[1], Message.ONE), intervals))
+        return list(map(lambda i: (i[0], i[1], msgclass.ONE()), intervals))
 
     @staticmethod
-    def _compute_message(primal, mailboxes, smt_solver, cache, tolerance,
+    def _compute_message(msgclass, primal, mailboxes, smt_solver, cache, tolerance,
                          x, y, evidence=None):
         """
         Returns a message from node 'x' to node 'y', possibly accounting for
@@ -348,7 +356,7 @@ class MPWMI3:
 
         # gather previously received messages
         aggr = [mailboxes[x][z] for z in mailboxes[x] if z != y]
-        new_integrand = Message.intersect(aggr, tolerance)
+        new_integrand = msgclass.intersect(aggr, tolerance)
 
 
         # compute the new pieces using the x-, y-, x/y-clauses in f + evidence
@@ -392,15 +400,16 @@ class MPWMI3:
                                                                  delta_x_y)]
             x_y_potentials = primal.edges()[(x, y)]['potentials']
             if len(x_y_potentials) > 0:
-                subs = {yvar: Real((uc + lc) / 2)}
-                potential_msgs = Message.potentials_to_messages(
-                    x_y_potentials, xvar, subs
+                yvarsubs = (yvar, Real((uc + lc) / 2))
+                subs = {yvar : Real((uc + lc) / 2)}
+                potential_msgs = msgclass.potentials_to_messages(
+                    x_y_potentials, xvar, yvarsubs
                 )
                 num_pwintegral = [(simplify(substitute(l, subs)),
                                    simplify(substitute(u, subs)),
                                    p)
                                   for l, u, p in pwintegral]
-                num_pwintegral = Message.intersect(
+                num_pwintegral = msgclass.intersect(
                     potential_msgs + [num_pwintegral],
                     tolerance)
                 bds = dict()
@@ -416,7 +425,7 @@ class MPWMI3:
                 pwintegral = [
                     (bds[l], bds[u], p) for l, u, p in num_pwintegral
                 ]
-            P, cache_hit = Message.integrate(cache, pwintegral, x, y)
+            P, cache_hit = msgclass.integrate(cache, pwintegral, x, y)
             new_msg.append((lc, uc, P))
 
         return new_msg, cache_hit
@@ -427,6 +436,9 @@ if __name__ == '__main__':
     from pysmt.shortcuts import *
     from sys import argv
     from wmipa import WMI
+
+    use_cache = bool(int(argv[1]))
+    use_symbolic = bool(int(argv[2]))
 
 
     x = Symbol("x", REAL)
@@ -440,20 +452,25 @@ if __name__ == '__main__':
             Or(LE(x, z), LE(Real(1/2),x)),
             LE(z, y))
 
-    w = Times(Ite(LE(x, z), Plus(x,z), Real(1)),
-              Ite(LE(y, Real(1/2)), Times(y,y), Real(1)))
+    wsmt = Times(Ite(LE(x, z), Plus(x,z), Real(1)),
+                 Ite(LE(y, Real(1/2)), Times(y,y), Real(1)))
+    if use_symbolic:
+        msgtype = 'symbolic'
+        w = wsmt
 
-    w = {LE(x, z): {(0,0) : {(1,0) : 1.0, (0,1) : 1.0}}, #, Plus(x,z), Real(1)),
-         LE(y, Real(1/2)) : {(0,0) : {(2,0) : 1.0}}}#, Times(y,y), Real(1)))
+    else:
+        msgtype = 'numeric'
+        w = {LE(x, z): {(0,0) : {(1,0) : 1.0, (0,1) : 1.0}}, #, Plus(x,z), Real(1)),
+             LE(y, Real(1/2)) : {(0,0) : {(2,0) : 1.0}}}#, Times(y,y), Real(1)))
 
     queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, z)]
     
-    mpwmi = MPWMI3(f, w, n_processes=3)
+    mpwmi = MPWMI3(f, w, n_processes=3, msgtype=msgtype)
 
     
     Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=bool(int(argv[1])))
 
-    wmipa = WMI(f, w)
+    wmipa = WMI(f, wsmt)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
     print("==================================================")
     print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")

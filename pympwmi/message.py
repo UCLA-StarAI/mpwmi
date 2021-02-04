@@ -1,4 +1,5 @@
 
+from fractions import Fraction
 from functools import reduce
 from itertools import product
 from math import e as numexp
@@ -7,7 +8,7 @@ from pysmt.fnode import FNode
 
 from sympy import Poly
 from sympy.core.symbol import Symbol as symvar
-from sympy.core.numbers import One
+from sympy.core.numbers import One, Zero
 from sympy.polys.rings import PolyElement
 from sympy.polys.fields import FracElement
 
@@ -17,30 +18,78 @@ from pympwmi.utils import literal_to_bounds, to_sympy
 class Message:
 
     #ONE = One()
-
-    @staticmethod
-    def product(x, y):
-        raise NotImplementedError("Can't use the base class")
+    #ZERO = Zero()
 
     @classmethod
-    def potentials_to_messages(cls, potentials, xvar, subs=None):
+    def potentials_to_messages(cls, potentials, xvar, yvarsubs=None):
+        yvar = None
+        subs = None
+        if yvarsubs is not None:
+            yvar = yvarsubs[0]
+            subs = {yvar : yvarsubs[1]}
         msgs = []
         for lit, f in potentials:
             msg = []
             k, is_lower, _ = literal_to_bounds(lit)[xvar]
-            if subs is not None:
+            if subs is not None:               
                 k = simplify(substitute(k, subs))
             k = k.constant_value()
             if is_lower:
-                msg.append((float('-inf'), k, cls.ONE))
-                msg.append((k, float('inf'), f))
+                msg.append((float('-inf'), k, cls.ONE()))
+                msg.append((k, float('inf'), cls.from_weight(f, xvar, yvar)))
             else:
-                msg.append((float('-inf'), k, f))
-                msg.append((k, float('inf'), cls.ONE))
+                msg.append((float('-inf'), k, cls.from_weight(f, xvar, yvar)))
+                msg.append((k, float('inf'), cls.ONE()))
             msgs.append(msg)
 
-        print("POTENTIALS TO MESSAGES:", msgs)
         return msgs
+
+    @classmethod
+    def integrate(cls, cache, message, x, y=None):
+        """
+        Computes the symbolic integral of 'x' of a piecewise polynomial 'message'.
+        The result might be a sympy expression or a numerical value.
+
+        Parameters
+        ----------
+        message : list
+            A list of (lower bound, upper bound, polynomial)
+        x : object
+            A string/sympy expression representing the integration variable
+        """
+        cache_hit = [0, 0] if (cache is not None) else None
+
+        #print("----------------")
+        #print("integrating variable:", x)
+        res = cls.ZERO()
+        x, y = cls.preprocess_vars(x, y)
+        for l, u, p in message:
+            #print("L", type(l), "--", l)
+            #print("U", type(u), "--", u)
+            #print("P", type(p), "--", p)
+            #print()
+
+            l, u, p = cls.preprocess_piece(l, u, p, x, y)
+
+            if cache is not None:  # for cache = True
+                integral = cls.integrate_cache(cache, cache_hit, l, u, p, x, y)
+            else:  # for cache = False
+                antidrv = cls.antiderivative(p, x)
+                lower = cls.substitute(antidrv, x, y, l)
+                upper = cls.substitute(antidrv, x, y, u)
+                #print("p", p)
+                #print("l", l)
+                #print("u", u)
+                #print("antidrv", antidrv)
+                #print("upper", upper)
+                #print("lower", lower)
+                integral = cls.subtract(upper, lower)
+                #print("integral", integral)
+            
+            res = cls.sum(res, integral)
+
+        return res, cache_hit
+
 
     @classmethod
     def intersect(cls, msgs, tolerance):
@@ -61,10 +110,6 @@ class Message:
 
         for msgid, msg in enumerate(msgs):
             for start, end, integrand in msg:
-                print("----------")
-                print("start", start)
-                print("end", end)
-                print("integrand", integrand)
                 if type(start) == FNode:
                     start = start.constant_value()
                 if type(end) == FNode:
@@ -126,66 +171,47 @@ class Message:
         return intersection
 
 
-    @classmethod
-    def integrate(cls, cache, message, x, y=None):
-        """
-        Computes the symbolic integral of 'x' of a piecewise polynomial 'message'.
-        The result might be a sympy expression or a numerical value.
-
-        Parameters
-        ----------
-        message : list
-            A list of (lower bound, upper bound, polynomial)
-        x : object
-            A string/sympy expression representing the integration variable
-        """
-        cache_hit = [0, 0] if (cache is not None) else None
-
-        print("----------------")
-        print("integrating variable:", x)
-        res = 0
-        x, y = cls.preprocess_vars(x, y)
-        for l, u, p in message:
-            print("L", type(l), "--", l)
-            print("U", type(u), "--", u)
-            print("P", type(p), "--", p)
-            print()
-
-            l, u, p = cls.preprocess_piece(l, u, p, x, y)
-
-            if cache is not None:  # for cache = True
-                integral = cls.integrate_cache(cache, cache_hit, l, u, p, x, y)
-            else:  # for cache = False
-                antidrv = cls.antiderivative(p, x)
-                lower = cls.substitute(antidrv, x, y, l)
-                upper = cls.substitute(antidrv, x, y, u)
-                print("p", p)
-                print("l", l)
-                print("u", u)
-                print("antidrv", antidrv)
-                print("upper", upper)
-                print("lower", lower)
-                integral = cls.substract(upper, lower)
-
-            res = cls.sum(res, integral)
-
-        return res, cache_hit
-
-
-
     @staticmethod
-    def to_cache(p):
+    def from_weight(f, x, y):
         raise NotImplementedError("Can't use the base class")
 
+    @staticmethod
+    def product(x, y):
+        raise NotImplementedError("Can't use the base class")
+
+    @staticmethod
+    def sum(x, y):
+        raise NotImplementedError("Can't use the base class")
 
     @staticmethod
     def from_cache(t, x, y):
         raise NotImplementedError("Can't use the base class")
 
+    @staticmethod
+    def to_cache(p):
+        raise NotImplementedError("Can't use the base class")
+
+    @staticmethod
+    def to_float(f):
+        raise NotImplementedError("Can't use the base class")
+
 
 class SympyMessage(Message):
 
-    ONE = One()
+    ONE = One
+    ZERO = Zero
+
+    @staticmethod
+    def from_weight(w, x, y):
+        v = tuple(sorted(map(lambda x: x.symbol_name(),
+                             [x] if y is None else [x,y])))
+
+        symv = tuple([symvar(x) for x in v])
+        if isinstance(w, FNode):
+            return Poly(to_sympy(w), symv, domain="RR")
+        else:
+            raise NotImplementedError()
+            
 
     @staticmethod
     def preprocess_vars(x, y):
@@ -297,6 +323,17 @@ class SympyMessage(Message):
         return integral
 
 
+    @staticmethod
+    def from_cache(t, x, y):
+        d = dict(t)
+        nvars = len(t[0][0])        
+        if nvars == 1:
+            return Poly.from_dict(d, x, domain='QQ')
+        elif nvars == 2:
+            return Poly.from_dict(d, x, y, domain='QQ')
+        else:
+            raise ValueError("Expected univariate or bivariate expression")
+
 
     @staticmethod
     def to_cache(p):
@@ -321,16 +358,10 @@ class SympyMessage(Message):
             t = tuple(sorted(l))
             return t
 
+
     @staticmethod
-    def from_cache(t, x, y):
-        d = dict(t)
-        nvars = len(t[0][0])        
-        if nvars == 1:
-            return Poly.from_dict(d, x, domain='QQ')
-        elif nvars == 2:
-            return Poly.from_dict(d, x, y, domain='QQ')
-        else:
-            raise ValueError("Expected univariate or bivariate expression")
+    def to_float(f):
+        return float(f.as_expr())
 
 
 class NumMessage(Message):
@@ -343,8 +374,18 @@ class NumMessage(Message):
     {(alpha_i, beta_i) : {(gamma_j, theta_j) : k_j}}
 
     """
-    PONE = {(0,0) : 1.0}
-    ONE = {(0,0) : PONE}
+    ONE = lambda : {(0,0) : {(0,0) : 1.0}} # exp{0x + 0y)*(x^0 * y^0 * 1)
+    ZERO = lambda : {}
+
+    @staticmethod
+    def from_weight(w, x, y):
+        if isinstance(w, FNode):
+            raise NotImplementedError()
+        else:
+            if y is not None and y.symbol_name() > x.symbol_name():
+                return NumMessage.reverse(w)
+            else:
+                return w
 
 
     @staticmethod
@@ -355,10 +396,21 @@ class NumMessage(Message):
     def preprocess_piece(l, u, p, x, y):
         def fnode2linear(f):
             A, B = 0.0, 0.0
-            if f.is_constant():
+            if not isinstance(f, FNode):
+                assert(isinstance(f, float) or isinstance(f, Fraction))
+                B = f
+            elif f.is_constant():
                 B = f.constant_value()
             elif f.is_plus():
-                raise NotImplementedError()
+                B = f.args()[0].constant_value()
+                Ax = f.args()[1]
+                if Ax.is_times():
+                    assert(Ax.args()[1].is_symbol())
+                    A = Ax.args()[0].constant_value()
+                elif Ax.is_symbol():
+                    A = 1.0
+                else:
+                    raise NotImplementedError()
 
 
             return (A, B)
@@ -377,7 +429,7 @@ class NumMessage(Message):
 
     @staticmethod
     def polysum(p1, p2):
-        psum = {}
+        psum = NumMessage.ZERO()
         for P in set(p1.keys()).union(set(p2.keys())):
             newk = p1.get(P, 0.0) + p2.get(P, 0.0)
             if newk != 0.0:
@@ -396,23 +448,24 @@ class NumMessage(Message):
 
     @staticmethod
     def polysub(p, s):
-        psub = {}
+        psub = NumMessage.ZERO()
         for e in p:
             if e[0] == 0:
-                newk = psub.get(e, 0.0) + p[e]
+                newe = (e[1], 0)
+                newk = psub.get(newe, 0.0) + p[e]
                 if newk != 0:
-                    psub[e] = newk
+                    psub[newe] = newk
                 else:
-                    psub.pop(e, None)
+                    psub.pop(newe, None)
             else:
                 if s[0] != 0:
-                    newe = (0, e[0]+e[1])
+                    newe = (e[0]+e[1], 0)
                     newk = psub.get(newe, 0.0) + p[e] * (s[0]**e[0])
                     if newk != 0:
                         psub[newe] = newk
 
                 if s[1] != 0:
-                    newe = (0, e[1])
+                    newe = (e[1], 0)
                     newk = psub.get(newe, 0.0) + p[e] * (s[1]**e[0])
                     if newk != 0:
                         psub[newe] = newk
@@ -421,7 +474,7 @@ class NumMessage(Message):
 
     @staticmethod
     def polyantider(p):
-        panti = {}
+        panti = NumMessage.ZERO()
         for e in p:
             panti[(e[0]+1, e[1])] = p[e] / (e[0]+1)
 
@@ -429,7 +482,7 @@ class NumMessage(Message):
 
     @staticmethod
     def polyder(p):
-        pder = {}
+        pder = NumMessage.ZERO()
         for e in p:
             if e[0] > 0:                
                 pder[(e[0]-1, e[1])] = p[e] * e[0]
@@ -441,7 +494,7 @@ class NumMessage(Message):
     def polypart(p, k):
         p2 = {pe : pk/k for pe,pk in p.items()}
         pder = NumMessage.polyder(p2)
-        if pder != {}:
+        if pder != NumMessage.ZERO():
             p3 = {e : -k for e, k in NumMessage.polypart(pder, k).items()}
             return NumMessage.polysum(p2, p3)
         else:
@@ -455,7 +508,7 @@ class NumMessage(Message):
 
     @staticmethod
     def sum(f1, f2):
-        fsum = {}
+        fsum = NumMessage.ZERO()
         for E in set(f1.keys()).union(set(f2.keys())):
             newpoly = NumMessage.polysum(f1.get(E, {}), f2.get(E, {}))
             if len(newpoly) > 0:
@@ -464,12 +517,12 @@ class NumMessage(Message):
         return fsum
 
     @staticmethod
-    def substract(f1, f2):
+    def subtract(f1, f2):
         return NumMessage.sum(f1, NumMessage.minus(f2))
 
     @staticmethod
     def product(f1, f2):
-        fprod = {}
+        fprod = NumMessage.ZERO()
         for E1, E2 in product(f1.keys(), f2.keys()):
             Eprod = (E1[0]+E2[0], E1[1]+E2[1])
 
@@ -483,13 +536,13 @@ class NumMessage(Message):
 
     @staticmethod
     def substitute(f, x, y, s):
-        fsub = {}
+        fsub = NumMessage.ZERO()
         for E in f:
             newp = NumMessage.polysub(f[E], s)
             if E[0] == 0:
-                newE = E
+                newE = (E[1], 0)
             else:
-                newE = (0, E[1]+E[0]*s[0])
+                newE = (E[1]+E[0]*s[0], 0)
                 newK = numexp ** (E[0]*s[1])
                 newp = {e : k * newK for e,k in newp.items()}
 
@@ -502,7 +555,7 @@ class NumMessage(Message):
 
     @staticmethod
     def antiderivative(f, x):
-        fanti = {}
+        fanti = NumMessage.ZERO()
         
         for E in f:
             if E[0] == 0:
@@ -511,6 +564,17 @@ class NumMessage(Message):
                 fanti[E] = NumMessage.polypart(f[E], E[0])
 
         return fanti
+
+
+    @staticmethod
+    def to_float(f):
+        if f == NumMessage.ZERO():
+            return 0.0
+        else:
+            assert(len(f) == 1 and (0,0) in f)
+            p = f[(0,0)]
+            assert(len(p) == 1 and (0,0) in p)            
+            return p[(0,0)]
 
 
 if __name__ == '__main__':

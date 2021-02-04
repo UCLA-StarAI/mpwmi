@@ -679,26 +679,12 @@ def weight_to_lit_potentials(expr):
             "The expression is not Times(Ite(lit_1, w_1, Real(1)), ..., Ite(lit_n, w_n, Real(1)))")
 
     if expr.is_times():
-        wls = [ite_to_potential(a) for a in expr.args()]
+        return dict(ite_to_potential(a) for a in expr.args())
     elif expr.is_real_constant() and expr.constant_value() == 1:
         return {}
     else:
-        wls = [ite_to_potential(expr)]
-
-    potentials = {}
-    for lit, w in wls:
-        variables = list(lit.get_free_variables())
-        v = tuple(sorted(map(lambda x: x.symbol_name(), variables)))
-        assert(len(v) in [1, 2]), "Not implemented for ternary atoms"
-
-        if v not in potentials:
-            potentials[v] = []
-
-        symv = tuple([symvar(x) for x in v])
-        symw = Poly(to_sympy(w), symv, domain="RR")
-        potentials[v].append((lit, symw))
-
-    return potentials
+        lit, w = ite_to_potential(expr)
+        return {lit : w}
 
 
 def ordered_variables(expr):

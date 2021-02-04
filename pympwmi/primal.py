@@ -57,33 +57,24 @@ class PrimalGraph:
             formula = flip_negated_literals_cnf(simplify(formula))
 
             if isinstance(weight, FNode):
-                potentials = weight_to_lit_potentials(weight)
-                variables = set(formula.get_free_variables()).union(
-                    weight.get_free_variables())
-            else:
-                potentials = {}
-                for lit, w in weight.items():
-                    variables = list(lit.get_free_variables())
-                    v = tuple(sorted(map(lambda x: x.symbol_name(), variables)))
-                    assert(len(v) in [1, 2]), "Not implemented for ternary atoms"
+                weight = weight_to_lit_potentials(weight)
+                
+            potentials = {}
+            for lit, w in weight.items():
+                lvars = list(lit.get_free_variables())
+                lvarsname = tuple(sorted(map(lambda x: x.symbol_name(), lvars)))
+                assert(len(lvars) in [1, 2]), "Not implemented for ternary atoms"
 
-                    if v not in potentials:
-                        potentials[v] = []
+                if lvarsname not in potentials:
+                    potentials[lvarsname] = []
                     
-                    potentials[v].append((lit, w))
+                potentials[lvarsname].append((flip_negated_literals_cnf(lit), w))
                     
-                variables = set(formula.get_free_variables()).union(
-                    *{lit.get_free_variables() for lit in weight})
+            variables = set(formula.get_free_variables()).union(
+                *{lit.get_free_variables() for lit in weight})
 
             # ariety assumption
             assert(all(len(dom) in [1,2] for dom in potentials))
-
-            # TODO: remove *flipping negated literals*
-            def flip_potential_pair(lw):
-                return (flip_negated_literals_cnf(lw[0]), lw[1])
-
-            for vs, vs_potentials in potentials.items():
-                potentials[vs] = list(map(flip_potential_pair, vs_potentials))
 
             # initializing the nodes
             self.G = nx.Graph()
