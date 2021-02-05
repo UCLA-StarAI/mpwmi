@@ -5,6 +5,7 @@ from itertools import product
 from math import e as numexp
 from pysmt.shortcuts import simplify, substitute
 from pysmt.fnode import FNode
+from pysmt.operators import POW as smtPow
 
 from sympy import Poly
 from sympy.core.symbol import Symbol as symvar
@@ -379,8 +380,54 @@ class NumMessage(Message):
 
     @staticmethod
     def from_weight(w, x, y):
+        
+        def fnode2polynomial(f, varnames):
+
+            def fnode2monomial(f, varnames):
+                exponents = {v : 0 for v in varnames}
+                const = 1.0
+                    
+                if f.is_times():
+                    fargs = f.args()
+                else:
+                    fargs = [f]
+
+                for a in fargs:
+                    if a.is_constant():
+                        const *= a.constant_value()
+                    elif a.is_symbol():
+                        exponents[a.symbol_name()] += 1
+                    elif a.node_type() == smtPow:
+                        exponents[a.args()[0].symbol_name()] = int(a.args()[1].constant_value())
+
+                if len(varnames) == 0:
+                    exptuple = (0, 0)
+                elif len(varnames) == 1:
+                    exptuple = (exponents[varnames[0]], 0)
+                elif len(varnames) == 2:
+                    exptuple = (exponents[varnames[0]], exponents[varnames[1]])
+                else:
+                    raise NotImplementedError("polynomial with ariety > 2")
+
+                return exptuple, const
+
+            if f.is_plus():
+                fargs = f.args()
+            else:
+                fargs = [f]
+
+            poly = {}
+            for a in fargs:
+                e, k = fnode2monomial(a, varnames)
+                if e not in poly :
+                    poly[e] = 0.0
+                poly[e] += k
+
+            return poly
+            
         if isinstance(w, FNode):
-            raise NotImplementedError()
+            varnames = sorted([v.symbol_name() for v in w.get_free_variables()])
+            return {(0,0) : fnode2polynomial(w, varnames)}
         else:
             if y is not None and y.symbol_name() > x.symbol_name():
                 return NumMessage.reverse(w)

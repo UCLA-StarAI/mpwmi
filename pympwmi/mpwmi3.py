@@ -463,6 +463,8 @@ if __name__ == '__main__':
         w = {LE(x, z): {(0,0) : {(1,0) : 1.0, (0,1) : 1.0}}, #, Plus(x,z), Real(1)),
              LE(y, Real(1/2)) : {(0,0) : {(2,0) : 1.0}}}#, Times(y,y), Real(1)))
 
+        w = wsmt
+
     queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, z)]
     
     mpwmi = MPWMI3(f, w, n_processes=3, msgtype=msgtype)
