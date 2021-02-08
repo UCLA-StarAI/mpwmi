@@ -29,17 +29,19 @@ class Message:
             yvar = yvarsubs[0]
             subs = {yvar : yvarsubs[1]}
         msgs = []
-        for lit, f in potentials:
+        for lit, w in potentials:
             msg = []
             k, is_lower, _ = literal_to_bounds(lit)[xvar]
             if subs is not None:               
                 k = simplify(substitute(k, subs))
             k = k.constant_value()
+            f = cls.from_weight(w, xvar, yvar)
+
             if is_lower:
                 msg.append((float('-inf'), k, cls.ONE()))
-                msg.append((k, float('inf'), cls.from_weight(f, xvar, yvar)))
+                msg.append((k, float('inf'), f))
             else:
-                msg.append((float('-inf'), k, cls.from_weight(f, xvar, yvar)))
+                msg.append((float('-inf'), k, f))
                 msg.append((k, float('inf'), cls.ONE()))
             msgs.append(msg)
 
@@ -60,32 +62,19 @@ class Message:
         """
         cache_hit = [0, 0] if (cache is not None) else None
 
-        #print("----------------")
-        #print("integrating variable:", x)
         res = cls.ZERO()
         x, y = cls.preprocess_vars(x, y)
         for l, u, p in message:
-            #print("L", type(l), "--", l)
-            #print("U", type(u), "--", u)
-            #print("P", type(p), "--", p)
-            #print()
 
             l, u, p = cls.preprocess_piece(l, u, p, x, y)
-
+            
             if cache is not None:  # for cache = True
                 integral = cls.integrate_cache(cache, cache_hit, l, u, p, x, y)
             else:  # for cache = False
                 antidrv = cls.antiderivative(p, x)
                 lower = cls.substitute(antidrv, x, y, l)
                 upper = cls.substitute(antidrv, x, y, u)
-                #print("p", p)
-                #print("l", l)
-                #print("u", u)
-                #print("antidrv", antidrv)
-                #print("upper", upper)
-                #print("lower", lower)
                 integral = cls.subtract(upper, lower)
-                #print("integral", integral)
             
             res = cls.sum(res, integral)
 
@@ -495,27 +484,57 @@ class NumMessage(Message):
 
     @staticmethod
     def polysub(p, s):
-        psub = NumMessage.ZERO()
+        A, B = s
+        psub = NumMessage.ZERO()        
         for e in p:
-            if e[0] == 0:
-                newe = (e[1], 0)
-                newk = psub.get(newe, 0.0) + p[e]
+            alpha, beta = e
+            k = p[e]
+            if alpha == 0:
+                newe = (beta, 0)
+                newk = psub.get(newe, 0.0) + k
                 if newk != 0:
                     psub[newe] = newk
                 else:
                     psub.pop(newe, None)
             else:
-                if s[0] != 0:
-                    newe = (e[0]+e[1], 0)
-                    newk = psub.get(newe, 0.0) + p[e] * (s[0]**e[0])
-                    if newk != 0:
-                        psub[newe] = newk
 
-                if s[1] != 0:
-                    newe = (e[1], 0)
-                    newk = psub.get(newe, 0.0) + p[e] * (s[1]**e[0])
+                if A == 0 and B == 0:
+                    continue
+                
+                elif A == 0:
+                    newe = (beta, 0)
+                    newk = psub.get(newe, 0.0) + k * B**alpha
                     if newk != 0:
                         psub[newe] = newk
+                    else:
+                        psub.pop(newe, None)
+
+                elif B == 0:
+                    newe = (alpha + beta, 0)
+                    newk = psub.get(newe, 0.0) + k * A**alpha
+                    if newk != 0:
+                        psub[newe] = newk
+                    else:
+                        psub.pop(newe, None)
+
+                if A != 0.0 and B != 0:
+
+                    newe = (alpha + beta, 0)
+                    C_i = k * A**alpha # * B**0 * binomial(alpha, 0)
+                
+                    for i in range(0, alpha+1):
+                        prevk = psub.get(newe, 0.0)                        
+                          
+                        # C_i = k * A**(alpha - i) * B**i * binomial(alpha, i)
+                        newk = prevk + C_i
+                    
+                        if newk != 0:
+                            psub[newe] = newk
+                        else:
+                            psub.pop(newe, None)
+
+                        C_i = C_i * ((alpha - i)/(i+1)) * B/A
+                        newe = (newe[0] - 1, 0)
 
         return psub
 
@@ -624,6 +643,23 @@ class NumMessage(Message):
             return p[(0,0)]
 
 
+
+def binomial(n, k):
+    # Credits: https://gist.github.com/rougier/ebe734dcc6f4ff450abf
+    if not 0 <= k <= n:
+        return 0
+    b = 1
+    for t in range(min(k, n-k)):
+        b *= n
+        b //= t+1
+        n -= 1
+                
+    return b
+
+
+bin_list = lambda n : [binomial(n, i) for i in range(0, n+1)]
+
+
 if __name__ == '__main__':
     from sympy import integrate, symbols, exp, simplify
     from numpy import isclose
@@ -669,10 +705,10 @@ if __name__ == '__main__':
 
 
     def test_substitute(fs):
-        for A, B in [(0, 0), (0, 7), (3, 0), (3, 7)]:
+        for A, B in [(0, 0), (0, 1), (-1, 0), (-1, 1)]:
             print(f"========== testing substitution with ({A}y + {B})")
             for i in range(len(fs)):
-                numres = simplify(convert(NumMessage.substitute(fs[i], None, None, (A, B))))
+                numres = simplify(convert(NumMessage.reverse(NumMessage.substitute(fs[i], None, None, (A, B)))))
                 symres = simplify(convert(fs[i]).subs({x: (A*y + B)}))
 
                 numres0, symres0 = float(numres.subs({y : 0})), float(symres.subs({y : 0}))
@@ -681,6 +717,8 @@ if __name__ == '__main__':
                     print("---", f"{i}", "---","OK")
                 else:
                     print("---", f"{i}", "---","ERROR")
+                    print("numres:", numres)
+                    print("symres:", symres)
                     exit()
 
     def test_antiderivative(fs):
@@ -695,8 +733,6 @@ if __name__ == '__main__':
             else:
                 print("---", f"{i}", "---","ERROR")
                 exit()
-
-
 
 
 
@@ -717,7 +753,7 @@ if __name__ == '__main__':
     for i,f in enumerate(fs):
         print(i, ":", f, "-->", convert(f))
 
-
+    fs = [{(0,0) : {(2,0) : 0.5, (1,1): 1.0}}]
     #test_binary(fs)
-    #test_substitute(fs)
-    test_antiderivative(fs)
+    test_substitute(fs)
+    #test_antiderivative(fs)

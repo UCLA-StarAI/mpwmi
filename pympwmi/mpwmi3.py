@@ -67,6 +67,8 @@ class MPWMI3:
             self.Message = SympyMessage
         elif msgtype == 'numeric':
             self.Message = NumMessage
+        else:
+            raise NotImplementedError(f"Unrecognized message type: {msgtype}")
 
         if rand_gen is None:
             from pympwmi.utils import RAND_SEED
@@ -440,39 +442,32 @@ if __name__ == '__main__':
     use_cache = bool(int(argv[1]))
     use_symbolic = bool(int(argv[2]))
 
-
-    x = Symbol("x", REAL)
-    y = Symbol("y", REAL)
-    z = Symbol("z", REAL)
+    NVARS = 2
 
 
-    f = And(LE(Real(0), x), LE(x, Real(1)),
-            LE(Real(0), y), LE(y, Real(2)),
-            LE(Real(-100), z), LE(z, Real(+100)),
-            Or(LE(x, z), LE(Real(1/2),x)),
-            LE(z, y))
 
-    wsmt = Times(Ite(LE(x, z), Plus(x,z), Real(1)),
-                 Ite(LE(y, Real(1/2)), Times(y,y), Real(1)))
-    if use_symbolic:
-        msgtype = 'symbolic'
-        w = wsmt
+    VARS = [Symbol(f'x{i}', REAL) for i in range(NVARS)]
 
-    else:
-        msgtype = 'numeric'
-        w = {LE(x, z): {(0,0) : {(1,0) : 1.0, (0,1) : 1.0}}, #, Plus(x,z), Real(1)),
-             LE(y, Real(1/2)) : {(0,0) : {(2,0) : 1.0}}}#, Times(y,y), Real(1)))
+    CLAUSES = [LE(Real(0), VARS[i]) for i in range(NVARS)]
+    CLAUSES.extend([LE(VARS[i], Real(1)) for i in range(NVARS)])
+    CLAUSES.extend([LE(Plus(VARS[i], VARS[i+1]), Real(1))
+                    for i in range(NVARS-1)])# for j in range(i+1, NVARS)])
 
-        w = wsmt
 
-    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, z)]
+    f = And(CLAUSES)
+    w = Times([Ite(LE(VARS[i], VARS[i+1]), Plus(VARS[i], VARS[i+1]), Real(1))
+                     for i in range(NVARS-1)])
+
+    queries = [LE(VARS[i], VARS[i+1]) for i in range(NVARS-1)] #for j in range(i+1, NVARS)]
     
+    
+    msgtype = 'symbolic' if use_symbolic else 'numeric'
     mpwmi = MPWMI3(f, w, n_processes=3, msgtype=msgtype)
 
     
-    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=bool(int(argv[1])))
+    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=use_cache)
 
-    wmipa = WMI(f, wsmt)
+    wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
     print("==================================================")
     print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")
