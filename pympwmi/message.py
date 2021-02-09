@@ -1,7 +1,7 @@
 
 from fractions import Fraction
 from functools import reduce
-from itertools import product
+from itertools import chain, product
 from math import e as numexp
 from pysmt.shortcuts import simplify, substitute
 from pysmt.fnode import FNode
@@ -78,6 +78,11 @@ class Message:
             
             res = cls.sum(res, integral)
 
+        '''
+        print("--------------------")
+        print(res)
+        print("--------------------")
+        '''
         return res, cache_hit
 
 
@@ -364,7 +369,7 @@ class NumMessage(Message):
     {(alpha_i, beta_i) : {(gamma_j, theta_j) : k_j}}
 
     """
-    ONE = lambda : {(0,0) : {(0,0) : 1.0}} # exp{0x + 0y)*(x^0 * y^0 * 1)
+    ONE = lambda : {(0,0) : {(0,0) : Fraction(1)}} # exp{0x + 0y)*(x^0 * y^0 * 1)
     ZERO = lambda : {}
 
     @staticmethod
@@ -374,12 +379,20 @@ class NumMessage(Message):
 
             def fnode2monomial(f, varnames):
                 exponents = {v : 0 for v in varnames}
-                const = 1.0
+                const = Fraction(1)
+
+
+                def prod2list(f):
+                    if not f.is_times():
+                        return [f]
+                    else:
+                        args = []
+                        for a in f.args():
+                            args.extend(prod2list(a))
+                        return args
                     
-                if f.is_times():
-                    fargs = f.args()
-                else:
-                    fargs = [f]
+
+                fargs = prod2list(f)
 
                 for a in fargs:
                     if a.is_constant():
@@ -400,6 +413,8 @@ class NumMessage(Message):
 
                 return exptuple, const
 
+
+
             if f.is_plus():
                 fargs = f.args()
             else:
@@ -409,10 +424,12 @@ class NumMessage(Message):
             for a in fargs:
                 e, k = fnode2monomial(a, varnames)
                 if e not in poly :
-                    poly[e] = 0.0
+                    poly[e] = Fraction(0)
                 poly[e] += k
 
             return poly
+
+        
             
         if isinstance(w, FNode):
             varnames = sorted([v.symbol_name() for v in w.get_free_variables()])
@@ -431,7 +448,7 @@ class NumMessage(Message):
     @staticmethod
     def preprocess_piece(l, u, p, x, y):
         def fnode2linear(f):
-            A, B = 0.0, 0.0
+            A, B = Fraction(0), Fraction(0)
             if not isinstance(f, FNode):
                 assert(isinstance(f, float) or isinstance(f, Fraction))
                 B = f
@@ -444,7 +461,7 @@ class NumMessage(Message):
                     assert(Ax.args()[1].is_symbol())
                     A = Ax.args()[0].constant_value()
                 elif Ax.is_symbol():
-                    A = 1.0
+                    A = Fraction(1)
                 else:
                     raise NotImplementedError()
 
@@ -467,8 +484,8 @@ class NumMessage(Message):
     def polysum(p1, p2):
         psum = NumMessage.ZERO()
         for P in set(p1.keys()).union(set(p2.keys())):
-            newk = p1.get(P, 0.0) + p2.get(P, 0.0)
-            if newk != 0.0:
+            newk = p1.get(P, Fraction(0)) + p2.get(P, Fraction(0))
+            if newk != 0:
                 psum[P] = newk
 
         return psum
@@ -478,20 +495,20 @@ class NumMessage(Message):
         pprod = {}
         for e1, e2 in product(p1.keys(), p2.keys()):
             eprod = (e1[0]+e2[0], e1[1]+e2[1])
-            pprod[eprod] = pprod.get(eprod, 0.0) + p1[e1] * p2[e2]
+            pprod[eprod] = pprod.get(eprod, Fraction(0)) + p1[e1] * p2[e2]
 
         return pprod
 
     @staticmethod
     def polysub(p, s):
-        A, B = s
+        A, B = map(Fraction, s)
         psub = NumMessage.ZERO()        
         for e in p:
             alpha, beta = e
             k = p[e]
             if alpha == 0:
                 newe = (beta, 0)
-                newk = psub.get(newe, 0.0) + k
+                newk = psub.get(newe, Fraction(0)) + k
                 if newk != 0:
                     psub[newe] = newk
                 else:
@@ -503,7 +520,7 @@ class NumMessage(Message):
                 
                 elif A == 0:
                     newe = (beta, 0)
-                    newk = psub.get(newe, 0.0) + k * B**alpha
+                    newk = psub.get(newe, Fraction(0)) + k * B**alpha
                     if newk != 0:
                         psub[newe] = newk
                     else:
@@ -511,19 +528,19 @@ class NumMessage(Message):
 
                 elif B == 0:
                     newe = (alpha + beta, 0)
-                    newk = psub.get(newe, 0.0) + k * A**alpha
+                    newk = psub.get(newe, Fraction(0)) + k * A**alpha
                     if newk != 0:
                         psub[newe] = newk
                     else:
                         psub.pop(newe, None)
 
-                if A != 0.0 and B != 0:
+                if A != 0 and B != 0:
 
                     newe = (alpha + beta, 0)
                     C_i = k * A**alpha # * B**0 * binomial(alpha, 0)
                 
                     for i in range(0, alpha+1):
-                        prevk = psub.get(newe, 0.0)                        
+                        prevk = psub.get(newe, Fraction(0))
                           
                         # C_i = k * A**(alpha - i) * B**i * binomial(alpha, i)
                         newk = prevk + C_i
@@ -533,7 +550,7 @@ class NumMessage(Message):
                         else:
                             psub.pop(newe, None)
 
-                        C_i = C_i * ((alpha - i)/(i+1)) * B/A
+                        C_i = C_i * Fraction(alpha - i, i+1) * B/A
                         newe = (newe[0] - 1, 0)
 
         return psub
@@ -542,7 +559,7 @@ class NumMessage(Message):
     def polyantider(p):
         panti = NumMessage.ZERO()
         for e in p:
-            panti[(e[0]+1, e[1])] = p[e] / (e[0]+1)
+            panti[(e[0]+1, e[1])] = Fraction(p[e], e[0]+1)
 
         return panti
 
@@ -558,7 +575,7 @@ class NumMessage(Message):
     
     @staticmethod
     def polypart(p, k):
-        p2 = {pe : pk/k for pe,pk in p.items()}
+        p2 = {pe : Fraction(pk, k) for pe,pk in p.items()}
         pder = NumMessage.polyder(p2)
         if pder != NumMessage.ZERO():
             p3 = {e : -k for e, k in NumMessage.polypart(pder, k).items()}
@@ -643,21 +660,6 @@ class NumMessage(Message):
             return p[(0,0)]
 
 
-
-def binomial(n, k):
-    # Credits: https://gist.github.com/rougier/ebe734dcc6f4ff450abf
-    if not 0 <= k <= n:
-        return 0
-    b = 1
-    for t in range(min(k, n-k)):
-        b *= n
-        b //= t+1
-        n -= 1
-                
-    return b
-
-
-bin_list = lambda n : [binomial(n, i) for i in range(0, n+1)]
 
 
 if __name__ == '__main__':

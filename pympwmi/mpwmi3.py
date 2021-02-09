@@ -35,8 +35,8 @@ class MPWMI3:
         Dictionary storing the symbolic mailboxes of each variable given evidence
     primal : PrimalGraph instance
         The primal graph of 'formula'
-    rand_gen : np.random.RandomState instance
-        The random number generator
+    seed : numerical
+        The random seed used to initialize np.random.Generator
     smt_solver : pysmt.Solver instance
         The SMT solver used by MPWMI
     tolerance : float
@@ -50,7 +50,7 @@ class MPWMI3:
 
     """
 
-    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0, #tolerance=1.49e-8,
+    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, seed=None, tolerance=0.0, #tolerance=1.49e-8,
                  n_processes=1, msgtype='symbolic'):
         """
         Parameters
@@ -59,8 +59,9 @@ class MPWMI3:
             The input formula representing the support of the distribution
         weight : pysmt.FNode instance
             Polynomial potentials attached to literal values
-        rand_gen : np.random.RandomState instance, optional
-            The random number generator (default: RandomState(mpwmi.RAND_SEED))
+        seed : optional (default pympwmi.utils.RAND_SEED)
+            The random seed used to initialize np.random.Generator
+            
         """
 
         if msgtype == 'symbolic':
@@ -70,11 +71,11 @@ class MPWMI3:
         else:
             raise NotImplementedError(f"Unrecognized message type: {msgtype}")
 
-        if rand_gen is None:
+        if seed is None:
             from pympwmi.utils import RAND_SEED
-            rand_gen = np.random.RandomState(RAND_SEED)
+            seed = RAND_SEED
 
-        self.rand_gen = rand_gen
+        self.seed = seed
         self.smt_solver = smt_solver
         self.tolerance = tolerance
 
@@ -138,7 +139,7 @@ class MPWMI3:
                 subevidence = [e for e in evidence
                                if set(e.get_free_symbols()).issubset(subvars)]
             subproblems.append((self.Message, subprimal, self.smt_solver, self.cache,
-                                self.tolerance, self.rand_gen, pysmt_env, subevidence))
+                                self.tolerance, np.random.default_rng(self.seed), pysmt_env, subevidence))
 
         with Pool(processes=self.n_processes) as pool:
             results = pool.starmap(MPWMI3._message_passing, subproblems)
@@ -225,6 +226,9 @@ class MPWMI3:
                     "Queries of ariety > 2 aren't supported")
 
         Z = 1.0
+        print("**************************************************")
+        print(Z_components)
+        print("**************************************************")
         for Z_comp in Z_components:
             Z *= self.Message.to_float(Z_comp)
 
@@ -284,6 +288,7 @@ class MPWMI3:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
+        print("exec_order:", exec_order)
         for n in exec_order:
 
             # account for univariate bounds/potentials first
