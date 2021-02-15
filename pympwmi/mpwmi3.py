@@ -277,12 +277,12 @@ class MPWMI3:
         # get a random directed forest from the primal graph
         # (nodes having at most in-degree 1)
         topdown = nx.DiGraph()
-        left = set(primal.nodes())
+        left = list(primal.nodes())
         while len(left) > 0:
             root = rand_gen.choice(list(left))
             newtree = nx.bfs_tree(primal.G, root)
             topdown = nx.compose(topdown, newtree)
-            left = left.difference(set(newtree.nodes))
+            left = [n for n in left if n not in newtree.nodes]
 
         # bottom-up pass first
         bottomup = nx.DiGraph(topdown).reverse()
