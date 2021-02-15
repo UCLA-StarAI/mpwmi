@@ -226,9 +226,6 @@ class MPWMI3:
                     "Queries of ariety > 2 aren't supported")
 
         Z = 1.0
-        print("**************************************************")
-        print(Z_components)
-        print("**************************************************")
         for Z_comp in Z_components:
             Z *= self.Message.to_float(Z_comp)
 

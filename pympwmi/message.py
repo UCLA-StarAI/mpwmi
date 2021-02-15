@@ -78,11 +78,6 @@ class Message:
             
             res = cls.sum(res, integral)
 
-        '''
-        print("--------------------")
-        print(res)
-        print("--------------------")
-        '''
         return res, cache_hit
 
 
@@ -433,12 +428,12 @@ class NumMessage(Message):
             
         if isinstance(w, FNode):
             varnames = sorted([v.symbol_name() for v in w.get_free_variables()])
-            return {(0,0) : fnode2polynomial(w, varnames)}
+            w = {(0,0) : fnode2polynomial(w, varnames)}
+        
+        if y is not None and y.symbol_name() < x.symbol_name():
+            return NumMessage.reverse(w)
         else:
-            if y is not None and y.symbol_name() > x.symbol_name():
-                return NumMessage.reverse(w)
-            else:
-                return w
+            return w
 
 
     @staticmethod
