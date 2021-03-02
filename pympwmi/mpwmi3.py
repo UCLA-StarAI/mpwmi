@@ -362,7 +362,6 @@ class MPWMI3:
         aggr = [mailboxes[x][z] for z in mailboxes[x] if z != y]
         new_integrand = msgclass.intersect(aggr, tolerance)
 
-
         # compute the new pieces using the x-, y-, x/y-clauses in f + evidence
         xvar = primal.nodes()[x]['var']
         yvar = primal.nodes()[y]['var']
@@ -430,6 +429,7 @@ class MPWMI3:
                     (bds[l], bds[u], p) for l, u, p in num_pwintegral
                 ]
             P, cache_hit = msgclass.integrate(cache, pwintegral, x, y)
+
             new_msg.append((lc, uc, P))
 
         return new_msg, cache_hit

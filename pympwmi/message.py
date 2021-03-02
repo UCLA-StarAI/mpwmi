@@ -370,12 +370,11 @@ class NumMessage(Message):
     @staticmethod
     def from_weight(w, x, y):
         
-        def fnode2polynomial(f, varnames):
+        def fnode2polynomial(f, v1, v2):
 
-            def fnode2monomial(f, varnames):
-                exponents = {v : 0 for v in varnames}
+            def fnode2monomial(f, v1, v2):
+                exponents = {v : 0 for v in [v1, v2]}
                 const = Fraction(1)
-
 
                 def prod2list(f):
                     if not f.is_times():
@@ -385,7 +384,6 @@ class NumMessage(Message):
                         for a in f.args():
                             args.extend(prod2list(a))
                         return args
-                    
 
                 fargs = prod2list(f)
 
@@ -397,16 +395,7 @@ class NumMessage(Message):
                     elif a.node_type() == smtPow:
                         exponents[a.args()[0].symbol_name()] = int(a.args()[1].constant_value())
 
-                if len(varnames) == 0:
-                    exptuple = (0, 0)
-                elif len(varnames) == 1:
-                    exptuple = (exponents[varnames[0]], 0)
-                elif len(varnames) == 2:
-                    exptuple = (exponents[varnames[0]], exponents[varnames[1]])
-                else:
-                    raise NotImplementedError("polynomial with ariety > 2")
-
-                return exptuple, const
+                return (exponents[v1], exponents[v2]), const
 
 
 
@@ -417,7 +406,7 @@ class NumMessage(Message):
 
             poly = {}
             for a in fargs:
-                e, k = fnode2monomial(a, varnames)
+                e, k = fnode2monomial(a, v1, v2)
                 if e not in poly :
                     poly[e] = Fraction(0)
                 poly[e] += k
@@ -427,13 +416,18 @@ class NumMessage(Message):
         
             
         if isinstance(w, FNode):
-            varnames = sorted([v.symbol_name() for v in w.get_free_variables()])
-            w = {(0,0) : fnode2polynomial(w, varnames)}
-        
-        if y is not None and y.symbol_name() < x.symbol_name():
-            return NumMessage.reverse(w)
+            if y is None:
+                name1, name2 = x.symbol_name(), None
+            else:
+                name1, name2 = sorted([x.symbol_name(), y.symbol_name()])
+            f = {(0,0) : fnode2polynomial(w, name1, name2)}
         else:
-            return w
+            f = w # when potentials can't be encoded in pysmt
+            
+        if y is not None and y.symbol_name() < x.symbol_name():
+            f = NumMessage.reverse(f)
+
+        return f
 
 
     @staticmethod
