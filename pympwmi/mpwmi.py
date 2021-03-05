@@ -1,16 +1,19 @@
 
-from functools import reduce
+
+from fractions import Fraction
+from multiprocessing import Pool, Manager
 import networkx as nx
 from networkx.algorithms.components import connected_components
 import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
+from pysmt.environment import get_env, push_env
 
+#from pympwmi.message import SympyMessage as Message
+from pympwmi.message import NumMessage, SympyMessage
 from pympwmi.primal import PrimalGraph
 from pympwmi.utils import *
-from sympy import integrate as symbolic_integral, Poly
-from sympy import sympify
-from sympy.core.mul import Mul as symbolic_mul
-from sympy.core.symbol import Symbol as symvar
+
+
 
 
 class MPWMI:
@@ -28,12 +31,12 @@ class MPWMI:
     ----------
     cache : dict
         Cache for integrals, or None
-    marginals : dict
-        Dictionary storing the symbolic marginals of each variable given evidence
+    mailboxes : dict
+        Dictionary storing the symbolic mailboxes of each variable given evidence
     primal : PrimalGraph instance
         The primal graph of 'formula'
-    rand_gen : np.random.RandomState instance
-        The random number generator
+    seed : numerical
+        The random seed used to initialize np.random.Generator
     smt_solver : pysmt.Solver instance
         The SMT solver used by MPWMI
     tolerance : float
@@ -47,7 +50,8 @@ class MPWMI:
 
     """
 
-    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, rand_gen=None, tolerance=0.0): #tolerance=1.49e-8):
+    def __init__(self, formula, weight, smt_solver=SMT_SOLVER, seed=None, tolerance=0.0, #tolerance=1.49e-8,
+                 n_processes=1, msgtype='symbolic'):
         """
         Parameters
         ----------
@@ -55,22 +59,33 @@ class MPWMI:
             The input formula representing the support of the distribution
         weight : pysmt.FNode instance
             Polynomial potentials attached to literal values
-        rand_gen : np.random.RandomState instance, optional
-            The random number generator (default: RandomState(mpwmi.RAND_SEED))
+        seed : optional (default pympwmi.utils.RAND_SEED)
+            The random seed used to initialize np.random.Generator
+            
         """
 
-        if rand_gen is None:
-            from pympwmi.utils import RAND_SEED
-            rand_gen = np.random.RandomState(RAND_SEED)
+        if msgtype == 'symbolic':
+            self.Message = SympyMessage
+        elif msgtype == 'numeric':
+            self.Message = NumMessage
+        else:
+            raise NotImplementedError(f"Unrecognized message type: {msgtype}")
 
-        self.rand_gen = rand_gen
+        if seed is None:
+            from pympwmi.utils import RAND_SEED
+            seed = RAND_SEED
+
+        self.seed = seed
         self.smt_solver = smt_solver
         self.tolerance = tolerance
 
         self.primal = PrimalGraph(formula, weight)
-        self.marginals = dict()
+
+        self.mailboxes = dict()
         self.cache = None
         self.cache_hit = None
+
+        self.n_processes = n_processes
 
     def compute_volumes(self, queries=None, evidence=None, cache=True):
         """Computes the unnormalized probabilities of univariate and
@@ -85,11 +100,11 @@ class MPWMI:
         Parameters
         ----------
         queries : list of pysmt.FNode instances (optional)
-            Uni/bivariate literals
+            Uni/bivariate literals, default: None
         evidence : iterable of pysmt.FNode instances (optional)
             Uni/bivariate clauses, default: None
         cache : bool (optional)
-            If True, integrals are cached, default: False
+            If True, integrals are cached, default: True
         """
 
         if not nx.is_forest(self.primal.G):
@@ -100,24 +115,52 @@ class MPWMI:
         else:
             queries = [flip_negated_literals_cnf(q) for q in queries]
 
-        if cache is True and self.cache is None:
-            self.cache = dict()
-            self.cache_hit = [0, 0]
-
-        elif cache is False:
+        if cache is False:
             self.cache = None
+        elif cache is True and self.cache is None:
+            self.cache = Manager().dict()
+            self.cache_hit = [0, 0]
+        else:
+            self.cache = Manager().dict(self.cache) # needed?
 
-        # send around messages, possibly accounting for 'evidence'
-        self._compute_marginals(evidence=evidence)
 
-        # compute the partition function as the product of the marginals of any node
-        # for each connected component in the primal graph
+        # message passing is parallelized over connected components in
+        # the primal graph
         components = list(connected_components(self.primal.G))
+        subproblems = []
+        pysmt_env = get_env()
+        for comp_vars in components:
+            subprimal = self.primal.subprimal(comp_vars)
+            subvars = {subprimal.nodes()[n]['var'] for n in subprimal.nodes()}
+
+            if evidence is None:
+                subevidence = None
+            else:
+                subevidence = [e for e in evidence
+                               if set(e.get_free_symbols()).issubset(subvars)]
+            subproblems.append((self.Message, subprimal, self.smt_solver, self.cache,
+                                self.tolerance, np.random.default_rng(self.seed), pysmt_env, subevidence))
+
+        with Pool(processes=self.n_processes) as pool:
+            results = pool.starmap(MPWMI._message_passing, subproblems)
+
+        for messages, ch in results:
+            self.mailboxes.update(messages)
+            if self.cache is not None:
+                self.cache_hit[True] += ch[True]
+                self.cache_hit[False] += ch[False]
+        
         Z_components = []
         for comp_vars in components:
             x = list(comp_vars)[0]
-            full_marginal = self._get_full_marginal(x)
-            comp_Z = self.piecewise_symbolic_integral(full_marginal, x)
+            symbolic_marginal = self.Message.intersect(list(self.mailboxes[x].values()),
+                                                       self.tolerance)
+        
+            comp_Z, ch = self.Message.integrate(self.cache, symbolic_marginal, x)
+            if self.cache is not None:
+                self.cache_hit[True] += ch[True]
+                self.cache_hit[False] += ch[False]
+
             Z_components.append(comp_Z)
 
         query_volumes = []
@@ -129,15 +172,16 @@ class MPWMI:
             x = q_vars[0].symbol_name()
             if len(q_vars) == 1:
 
-                # univariate query
+                # MP messages + univariate query
+                msgs = list(self.mailboxes[x].values())
                 l, u = domains_to_intervals(q)[0]
-                q_msg = [(l, u, 1)]
-
-                # intersecting with the node symbolic marginal
-                q_marginal = self._get_msgs_intersection(
-                    [self._get_full_marginal(x), q_msg]
-                )
-                q_vol = self.piecewise_symbolic_integral(q_marginal, x)
+                msgs.append([(l, u, self.Message.ONE())])                
+                query_marginal = self.Message.intersect(msgs, self.tolerance)
+                
+                q_vol, ch = self.Message.integrate(self.cache, query_marginal, x)
+                if self.cache is not None:
+                    self.cache_hit[True] += ch[True]
+                    self.cache_hit[False] += ch[False]
 
                 # account for the volume of unconnected variables
                 for i, comp_vars in enumerate(components):
@@ -152,23 +196,23 @@ class MPWMI:
                 y = q_vars[1].symbol_name()
 
                 # creates a new message using the query 'q' as evidence
-                q_marginal = self._compute_message(x, y, evidence=[q])
-                q_marginal = self._get_msgs_intersection([q_marginal] +
-                                                          [self.marginals[y][z]
-                                                           for z in
-                                                           self.marginals[y]
-                                                           if z != x])
+                q_msg, ch = MPWMI._compute_message(self.Message, self.primal,
+                                                    self.mailboxes, self.smt_solver,
+                                                    self.cache, self.tolerance,
+                                                    x, y, evidence=[q])
 
-                y_potentials = self.primal.nodes()[y]['potentials']
-                if len(y_potentials) > 0:
-                    potential_msgs = self._parse_potentials(
-                        y_potentials, self.primal.nodes()[y]['var']
-                    )
-                    q_marginal = self._get_msgs_intersection(
-                        potential_msgs + [q_marginal]
-                    )
+                if self.cache is not None:
+                    self.cache_hit[True] += ch[True]
+                    self.cache_hit[False] += ch[False]
 
-                q_vol = self.piecewise_symbolic_integral(q_marginal, y)
+                msgs =  [q_msg] + [self.mailboxes[y][z]
+                                   for z in self.mailboxes[y] if z != x]
+                query_marginal = self.Message.intersect(msgs, self.tolerance)
+                q_vol, ch = self.Message.integrate(self.cache, query_marginal, y)
+
+                if self.cache is not None:
+                    self.cache_hit[True] += ch[True]
+                    self.cache_hit[False] += ch[False]
 
                 # account for the volume of unconnected variables
                 for i, comp_vars in enumerate(components):
@@ -183,69 +227,104 @@ class MPWMI:
 
         Z = 1.0
         for Z_comp in Z_components:
-            Z *= Z_comp
+            Z *= self.Message.to_float(Z_comp)
 
-        if self.cache_hit is not None:
+        if self.cache is not None:
             # TODO: check if cache_hit index should be True or False
             print("\tHITS: {}/{} (ratio {})".format(self.cache_hit[True],
                                                     sum(self.cache_hit),
                                                     self.cache_hit[True] /
                                                     sum(self.cache_hit)))
 
-        Z = float(Z.as_expr())
-        query_volumes = [float(qv.as_expr()) for qv in query_volumes]
+        #Z = float(Z.as_expr())
+        
+        query_volumes = [self.Message.to_float(qv) for qv in query_volumes]
         return Z, query_volumes
 
-    def _compute_marginals(self, evidence=None):
+    @staticmethod
+    def _message_passing(msgclass, primal, smt_solver, cache, tolerance,
+                         rand_gen, pysmt_env, evidence=None):
         """
         Computes the symbolic piecewise integrals representing the marginal of
         each node. Performs a message passing step:
         1) The primal forest is randomly directed
         2) Nodes send/receive messages to/from every neighbor
-           accounting for potentials and evidence when computing their marginals
+           accounting for potentials and evidence when computing their mailboxes
 
         Parameters
         ----------
         evidence : list (optional)
             List of uni/bivariate clauses considered as evidence when computing
-            the marginals
+            the mailboxes
         """
+
+        push_env(pysmt_env)
+
+        if cache is not None:
+            cache_hit = [0, 0]
+        else:
+            cache_hit = None
+            
         if evidence is None:
             evidence = []
 
-        # initialize marginals and the mailbox of each node
-        for n in self.primal.nodes():
-            self.marginals[n] = dict()
+        # initialize mailbox of each node
+        mailboxes = {n : dict() for n in primal.nodes()}
 
         # get a random directed forest from the primal graph
         # (nodes having at most in-degree 1)
         topdown = nx.DiGraph()
-        left = set(self.primal.nodes())
+        left = list(primal.nodes())
         while len(left) > 0:
-            root = self.rand_gen.choice(list(left))
-            newtree = nx.bfs_tree(self.primal.G, root)
+            root = rand_gen.choice(list(left))
+            newtree = nx.bfs_tree(primal.G, root)
             topdown = nx.compose(topdown, newtree)
-            left = left.difference(set(newtree.nodes))
+            left = [n for n in left if n not in newtree.nodes]
 
         # bottom-up pass first
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
-        print("EXEC-ORDER", exec_order)
+        print("exec_order:", exec_order)
         for n in exec_order:
+
+            # account for univariate bounds/potentials first
+            mailboxes[n][n] = MPWMI._basecase_msg(msgclass, primal, n)
+            if len(primal.nodes()[n]['potentials']) > 0:
+                aggr = [mailboxes[n][n]] + msgclass.potentials_to_messages(
+                    primal.nodes()[n]['potentials'],
+                    primal.nodes()[n]['var'])
+                mailboxes[n][n] = msgclass.intersect(aggr, tolerance)
+            
             parents = list(bottomup.neighbors(n))
             assert (len(parents) < 2), "this shouldn't happen"
             if len(parents) == 1:
                 parent = parents[0]
-                self._send_message(n, parent, evidence=evidence)
+                mailboxes[parent][n], ch = MPWMI._compute_message(msgclass, primal,
+                                                                   mailboxes, smt_solver,
+                                                                   cache, tolerance, n,
+                                                                   parent, evidence=evidence)
+                if cache is not None:
+                    cache_hit[True] += ch[True]
+                    cache_hit[False] += ch[False]
+
 
         # top-down pass
         exec_order.reverse()
         for n in exec_order:
             for child in topdown.neighbors(n):
-                self._send_message(n, child, evidence=evidence)
+                mailboxes[child][n], ch = MPWMI._compute_message(msgclass, primal,
+                                                                  mailboxes, smt_solver,
+                                                                  cache, tolerance, n,
+                                                                  child, evidence=evidence)
+                if ch is not None:
+                    cache_hit[True] += ch[True]
+                    cache_hit[False] += ch[False]
 
-    def _basecase_msg(self, x):
+        return mailboxes, cache_hit
+
+    @staticmethod
+    def _basecase_msg(msgclass, primal, x):
         """
         Computes the piecewise integral for a leaf node.
 
@@ -255,12 +334,13 @@ class MPWMI:
             Name of the variable in the primal graph
         """
 
-        assert(self.primal.G.degree[x] <= 1)
-        intervals = domains_to_intervals(self.primal.get_univariate_formula(x))
-        one = Poly(1, symvar(x), domain="QQ")
-        return list(map(lambda i: (i[0], i[1], one), intervals))
+        #assert(primal.G.degree[x] <= 1)
+        intervals = domains_to_intervals(primal.get_univariate_formula(x))
+        return list(map(lambda i: (i[0], i[1], msgclass.ONE()), intervals))
 
-    def _compute_message(self, x, y, evidence=None):
+    @staticmethod
+    def _compute_message(msgclass, primal, mailboxes, smt_solver, cache, tolerance,
+                         x, y, evidence=None):
         """
         Returns a message from node 'x' to node 'y', possibly accounting for
         potentials and evidence.
@@ -273,33 +353,18 @@ class MPWMI:
         evidence : list (optional)
             List of uni/bivariate clauses, default: None
         """
-        assert((x, y) in self.primal.edges())
-
-        # gather previously received messages
-        if self.primal.G.degree[x] == 1:
-            new_integrand = self._basecase_msg(x)
-        else:
-            # aggregate msgs not coming from the recipient
-            aggr = [self.marginals[x][z] for z in self.marginals[x] if z != y]
-            new_integrand = self._get_msgs_intersection(aggr)
-
-        # account for potentials associated with this variable
-        x_potentials = self.primal.nodes()[x]['potentials']
-
-        if len(x_potentials) > 0:
-            potential_msgs = self._parse_potentials(
-                x_potentials, self.primal.nodes()[x]['var']
-            )
-            new_integrand = self._get_msgs_intersection(
-                potential_msgs + [new_integrand]
-            )
+        assert((x, y) in primal.edges())
 
         if evidence is None:
             evidence = []
 
+        # gather previously received messages
+        aggr = [mailboxes[x][z] for z in mailboxes[x] if z != y]
+        new_integrand = msgclass.intersect(aggr, tolerance)
+
         # compute the new pieces using the x-, y-, x/y-clauses in f + evidence
-        xvar = self.primal.nodes()[x]['var']
-        yvar = self.primal.nodes()[y]['var']
+        xvar = primal.nodes()[x]['var']
+        yvar = primal.nodes()[y]['var']
 
         evidence_x = And([clause for clause in evidence
                           if set(clause.get_free_variables()) == {xvar}])
@@ -313,11 +378,11 @@ class MPWMI:
                       for l, u, _ in new_integrand])
         delta_x = simplify(And(delta_x, evidence_x))
 
-        delta_y = self.primal.get_univariate_formula(y)
+        delta_y = primal.get_univariate_formula(y)
         delta_y = simplify(And(delta_y, evidence_y))
 
         # clauses containing exclusively x and y
-        delta_x_y = self.primal.get_bivariate_formula(x, y)
+        delta_x_y = primal.get_bivariate_formula(x, y)
         delta_x_y = simplify(And(delta_x_y, evidence_x_y))
 
         cpts = find_edge_critical_points(delta_x, delta_y, delta_x_y)
@@ -329,26 +394,27 @@ class MPWMI:
 
             # we shouldn't check for the smt solver at each iteration
             #if self.smt_solver and not is_sat(f, solver_name=self.smt_solver):
-            if not is_sat(f, solver_name=self.smt_solver):
+            if not is_sat(f, solver_name=smt_solver):
                 continue
             pwintegral = [(ls, us, new_integrand[ip][2])
                           for ls, us, ip in find_symbolic_bounds(new_integrand,
                                                                  xvar,
                                                                  (uc + lc) / 2,
                                                                  delta_x_y)]
-            x_y_potentials = self.primal.edges()[(x, y)]['potentials']
+            x_y_potentials = primal.edges()[(x, y)]['potentials']
             if len(x_y_potentials) > 0:
-                subs = {yvar: Real((uc + lc) / 2)}
-                potential_msgs = MPWMI._parse_potentials(
-                    x_y_potentials, xvar, subs
+                yvarsubs = (yvar, Real((uc + lc) / 2))
+                subs = {yvar : Real((uc + lc) / 2)}
+                potential_msgs = msgclass.potentials_to_messages(
+                    x_y_potentials, xvar, yvarsubs
                 )
                 num_pwintegral = [(simplify(substitute(l, subs)),
                                    simplify(substitute(u, subs)),
                                    p)
                                   for l, u, p in pwintegral]
-                num_pwintegral = self._get_msgs_intersection(
-                    potential_msgs + [num_pwintegral]
-                )
+                num_pwintegral = msgclass.intersect(
+                    potential_msgs + [num_pwintegral],
+                    tolerance)
                 bds = dict()
                 for l, u, _ in pwintegral:
                     l_num = simplify(substitute(l, subs))
@@ -362,292 +428,46 @@ class MPWMI:
                 pwintegral = [
                     (bds[l], bds[u], p) for l, u, p in num_pwintegral
                 ]
-            P = self.piecewise_symbolic_integral(pwintegral, x, y)
+            P, cache_hit = msgclass.integrate(cache, pwintegral, x, y)
+
             new_msg.append((lc, uc, P))
 
-        return new_msg
-
-    def _send_message(self, x, y, evidence=None):
-        """
-        Sends a message from node 'x' to node 'y', possibly accounting for
-        potentials and evidence.
-
-        Parameters
-        ----------
-        x : str
-        y : str
-            The nodes on the primal graph having an edge connecting them.
-        evidence : list (optional)
-            List of uni/bivariate clauses, default: None
-        """
-        self.marginals[y][x] = self._compute_message(x, y, evidence=evidence)
-
-    def piecewise_symbolic_integral(self, integrand, x, y=None):
-        """
-        Computes the symbolic integral of 'x' of a piecewise polynomial 'integrand'.
-        The result might be a sympy expression or a numerical value.
-
-        Parameters
-        ----------
-        integrand : list
-            A list of (lower bound, upper bound, polynomial)
-        x : object
-            A string/sympy expression representing the integration variable
-        """
-        res = 0
-        print("INTEGRATING",x)
-        print()
-        for l, u, p in integrand:
-
-            print(f"{type(l)} LOW:", l)
-            print(f"{type(u)} UP:", u)
-            print(f"{type(p)} INTEGRAND:", p)
-            print("---")
-            
-            symx = symvar(x)
-            symy = symvar(y) if y else symvar("aux_y")
-
-            syml = Poly(to_sympy(l), symy, domain="QQ")
-            symu = Poly(to_sympy(u), symy, domain="QQ")
-            if type(p) != Poly:
-                symp = Poly(to_sympy(p), symx, domain="QQ")
-            else:
-                symp = Poly(p.as_expr(), symx, domain=f"QQ[{symy}]") if y else p
-
-            if self.cache is not None:  # for cache = True
-                """ hierarchical cache, where we cache:
-                 - the anti-derivatives for integrands, retrieved by the same
-                       integrand key
-                 - the partial integration term, retrieved by the same
-                       (integrand key, lower / upper bound key) pair
-                 - the whole integration, retrieved by the same
-                       (integrand key, lower bound key, upper bound key) pair
-                """
-                bds_ks = [MPWMI.cache_key(syml)[0],
-                          MPWMI.cache_key(symu)[0]]  # cache keys for bounds
-                bds = [syml.as_expr(),
-                       symu.as_expr()]
-                p_ks = MPWMI.cache_key(symp)  # cache key for integrand polynomial
-                trm_ks = [(bds_ks[0], p_ks[0]),
-                          (bds_ks[1], p_ks[0])]
-                if (bds_ks[0], bds_ks[1], p_ks[0]) in self.cache:
-                    # retrieve the whole integration
-                    self.cache_hit[True] += 1
-                    symintegral = self.cache[(bds_ks[0], bds_ks[1], p_ks[0])]
-                    symintegral = symintegral.subs(symintegral.gens[0], symy)
-                else:
-                    terms = []
-                    for tk in trm_ks:  # retrieve partial integration terms
-                        if tk in self.cache:
-                            trm = self.cache[tk]
-                            trm = trm.subs(trm.gens[0], symy)
-                            terms.append(trm)
-                        else:
-                            terms.append(None)
-
-                    if None not in terms:
-                        self.cache_hit[True] += 1
-                    else:
-                        if p_ks[0] in self.cache:  # retrieve anti-derivative
-                            self.cache_hit[True] += 1
-                            antidrv = self.cache[p_ks[0]]
-                            antidrv_expr = antidrv.as_expr().subs(antidrv.gens[0], symx)
-                            antidrv = Poly(antidrv_expr, symx,
-                                           domain=f"QQ[{symy}]") if y \
-                                else Poly(antidrv_expr, symx, domain="QQ")
-                        else:
-                            self.cache_hit[False] += 1
-                            antidrv = symp.integrate(symx)
-                            for k in p_ks:  # cache anti-derivative
-                                self.cache[k] = antidrv
-
-                        for i in range(len(terms)):
-                            if terms[i] is not None:
-                                continue
-                            terms[i] = antidrv.eval({symx: bds[i]})
-                            terms[i] = Poly(terms[i].as_expr(), symy, domain="QQ")
-                            for k in p_ks:  # cache partial integration terms
-                                self.cache[(bds_ks[i], k)] = terms[i]
-
-                    symintegral = terms[1] - terms[0]
-                    for k in p_ks:  # cache the whole integration
-                        self.cache[(bds_ks[0], bds_ks[1], k)] = symintegral
-
-            else:  # for cache = False
-                antidrv = symp.integrate(symx)
-                symintegral = antidrv.eval({symx: symu.as_expr()}) - \
-                              antidrv.eval({symx: syml.as_expr()})
-
-            print("RESULT:", symintegral)
-            print("====")
-            res += symintegral
-
-        return res
+        return new_msg, cache_hit
 
 
-    @staticmethod
-    def _parse_potentials(potentials, xvar, subs=None):
-        msgs = []
-        symx = symvar(str(xvar))
-        one = Poly(1, symx, domain="QQ")
-        for lit, f in potentials:
-            msg = []
-            k, is_lower, _ = literal_to_bounds(lit)[xvar]
-            if subs is not None:
-                k = simplify(substitute(k, subs))
-            k = k.constant_value()
-            if is_lower:
-                msg.append((float('-inf'), k, one))
-                msg.append((k, float('inf'), f))
-            else:
-                msg.append((float('-inf'), k, f))
-                msg.append((k, float('inf'), one))
-            msgs.append(msg)
-        return msgs
-
-
-    # TODO: document and refactor this
-    @staticmethod
-    def _line_sweep(points: list, n_msgs: int):
-        intersection = []  # elements: tuple (start, end, integrand)
-        factors = [None] * n_msgs
-        n_factors = 0
-        l = None
-        for x, is_lower, f, msgid in points:
-            if not is_lower:
-                assert(factors[msgid] is not None)
-                if n_factors == n_msgs:
-                    assert(l is not None)
-                    assert(l <= x)
-                    integrand = reduce(lambda x, y: x * y,
-                                       factors[1:],
-                                       factors[0])
-                    intersection.append([l, x, integrand])
-
-                factors[msgid] = None
-                l = None
-                n_factors -= 1
-
-            else:
-                assert(factors[msgid] is None)
-                factors[msgid] = sympify(f)
-                l = x
-                n_factors += 1
-
-        assert(n_factors == 0)
-        assert(factors == [None] * n_msgs)
-
-        return intersection
-
-    def _get_full_marginal(self, x):
-        incoming = list(self.marginals[x].values())
-        if len(incoming) > 0:
-            full_marginal = self._get_msgs_intersection(incoming)
-        else:
-            full_marginal = self._basecase_msg(x)
-
-        x_potentials = self.primal.nodes()[x]['potentials']
-        if len(x_potentials) > 0:
-            potential_msgs = self._parse_potentials(
-                x_potentials, self.primal.nodes()[x]['var']
-            )
-            potential_msgs.append(full_marginal)
-            full_marginal = self._get_msgs_intersection(potential_msgs)
-
-        return full_marginal
-
-    # TODO: document and refactor this
-    def _get_msgs_intersection(self, msgs: list):
-        '''
-        Given a list of messages, each one encoding a piecewise integral:
-            (x, [[lb1(x), ub1(x), f1(x)], ... , [lbn(x), ubn(x), fn(x)]])
-
-        = sum_{i=1}^{n} int_{lbi}^{ubi} fi(x) dx
-
-
-        '''
-
-        points = []  # element: [point, isright, integrand, index]
-        list_num = len(msgs)
-
-        if len(msgs) == 1:
-            return msgs[0]
-
-        for msgid, msg in enumerate(msgs):
-            for start, end, integrand in msg:
-                if type(start) == FNode:
-                    start = start.constant_value()
-                if type(end) == FNode:
-                    end = end.constant_value()
-                if abs(end - start) < self.tolerance:  # TODO: should i put it here?
-                    continue
-                if float(start) == float(end):
-                    print("DEGENERATE INTERVAL HERE!!!!!")
-                    print(f"with degenerate interval [{start}, {end}]")
-                    continue
-                p1 = [start, True, integrand, msgid]
-                p2 = [end, False, integrand, msgid]
-                points.append(p1)
-                points.append(p2)
-
-        points.sort(key=lambda p: (float(p[0]), p[1]), reverse=False)
-        intersection = MPWMI._line_sweep(points, len(msgs))
-        intersection = self._filter_msgs(intersection)
-        return intersection
-
-    def _filter_msgs(self, msgs: list):
-        f_msgs = []
-        for start, end, integrand in msgs:
-            if abs(end - start) < self.tolerance:
-                continue
-            f_msgs.append((start, end, integrand))
-        return f_msgs
-
-    @staticmethod
-    def cache_key(p):
-        return dict_to_tuple(p.as_dict(native=True))
 
 if __name__ == '__main__':
     from pysmt.shortcuts import *
     from sys import argv
     from wmipa import WMI
 
-    w = Symbol("w", REAL)
-    x = Symbol("x", REAL)
-    y = Symbol("y", REAL)
-    z = Symbol("z", REAL)
-    """
+    use_cache = bool(int(argv[1]))
+    use_symbolic = bool(int(argv[2]))
 
-    f = And(LE(Real(0), w), LE(w, Real(1)),
-            LE(Real(0), x), LE(x, Real(1)),
-            LE(Real(0), y), LE(y, Real(1)),
-            LE(Real(0), z), LE(z, Real(1)),
-            LE(Plus(w, x), Real(1)),
-            LE(Plus(x, y), Real(1)),
-            LE(Plus(y, z), Real(1)))
+    NVARS = 2
 
-    w = Ite(LE(x, y), Real(2), Real(1))
-    queries = [LE(w, Real(0.5)),
-               LE(x, Real(0.5)),
-               LE(y, Real(0.5)),
-               LE(z, Real(0.5)),
-               LE(Plus(w, x), Real(0.5)),
-               LE(Plus(x, y), Real(0.5)),
-               LE(Plus(y, z), Real(0.5))]
-    """
 
-    f = And(LE(Real(1), x), LE(x, Real(2)),
-            LE(Real(1), y), LE(y, Real(2)),
-            LE(Real(1), z), LE(z, Real(2)))
 
-    w = Ite(LE(x, y), Plus(x,y), Real(1))
+    VARS = [Symbol(f'x{i}', REAL) for i in range(NVARS)]
 
-    queries = [LE(x, Real(3/2)), LE(y, Real(3/2)), LE(x, y)]
+    CLAUSES = [LE(Real(0), VARS[i]) for i in range(NVARS)]
+    CLAUSES.extend([LE(VARS[i], Real(1)) for i in range(NVARS)])
+    CLAUSES.extend([LE(Plus(VARS[i], VARS[i+1]), Real(1))
+                    for i in range(NVARS-1)])# for j in range(i+1, NVARS)])
+
+
+    f = And(CLAUSES)
+    w = Times([Ite(LE(VARS[i], VARS[i+1]), Plus(VARS[i], VARS[i+1]), Real(1))
+                     for i in range(NVARS-1)])
+
+    queries = [LE(VARS[i], VARS[i+1]) for i in range(NVARS-1)] #for j in range(i+1, NVARS)]
     
-    mpwmi = MPWMI(f, w)
+    
+    msgtype = 'symbolic' if use_symbolic else 'numeric'
+    mpwmi = MPWMI(f, w, n_processes=3, msgtype=msgtype)
 
     
-    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=bool(int(argv[1])))
+    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=use_cache)
 
     wmipa = WMI(f, w)
     Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)

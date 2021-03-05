@@ -1,16 +1,16 @@
 
 
-EXP_NAME="test"
+EXP_NAME="bigstars"
 BENCH_DIR=$EXP_NAME"/benchmark"
 RES_DIR=$EXP_NAME"/results"
 PLOTS_DIR=$EXP_NAME"/plots"
 
-SHAPE="PATH STAR SNOW-2"
-NV="2 4 6"
+SHAPE="STAR"
+NV="5 10 15"
 NC="1 2"
 NL="1 2"
 DEGREE="1 2"
-REPETITIONS="0 1 2 3"
+REPETITIONS="0 1 2 3 4"
 
 SOLVERS="mpwmi-numeric-1 mpwmi-symbolic-1"
 

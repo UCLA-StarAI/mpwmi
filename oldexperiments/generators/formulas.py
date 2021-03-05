@@ -46,11 +46,12 @@ class ForestGenerator:
 
     # shape enum
     SHAPE_ARGSEP = '-'
-    SHAPE_PATH = 'PATH'
-    SHAPE_RAND = 'RAND' # not for now tho
-    SHAPE_SNOW = 'SNOW'
-    SHAPE_STAR = 'STAR'
-    SHAPES = [SHAPE_PATH, SHAPE_SNOW, SHAPE_STAR] #, SHAPE_RAND] not for now
+    SHAPE_PATH = 'p'
+    SHAPE_RAND = 'r' # not for now tho
+    SHAPE_SNOW = 'sn'
+    SHAPE_STAR = 'st'
+    SHAPE_TREE = 't'
+    SHAPES = [SHAPE_TREE, SHAPE_PATH, SHAPE_SNOW, SHAPE_STAR] #, SHAPE_RAND] not for now
 
     def __init__(self, rand_gen=None, variable_name=None,
                  univ_lu=None, max_m=None, p_univ=None, p_pos=None):
@@ -203,8 +204,8 @@ class ForestGenerator:
 
         """        
         if shape is None:
-            print("WARNING: No shape specified, using SHAPE_PATH")
-            shape = ForestGenerator.SHAPE_PATH
+            print("WARNING: No shape specified, using SHAPE_TREE")
+            shape = ForestGenerator.SHAPE_TREE
 
         L, U = self.univ_l, self.univ_u
         D = abs(U - L)
@@ -238,6 +239,8 @@ class ForestGenerator:
             deps = list(nx.generators.classic.full_rary_tree(r, nvars).edges)
         elif shapeargs[0] == ForestGenerator.SHAPE_STAR:
             deps = list(nx.generators.star_graph(nvars-1).edges)
+        elif shapeargs[0] == ForestGenerator.SHAPE_TREE:
+            deps = list(nx.generators.trees.random_tree(nvars, seed=self.rand_gen).edges)
         else:
             raise NotImplementedError(f"shape not in ForestGenerator.SHAPES = {ForestGenerator.SHAPES}")
 
