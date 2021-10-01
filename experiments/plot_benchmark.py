@@ -58,7 +58,9 @@ def get_results(results_dir, shape, solver,
             time_path = os.path.join(results_dir, results_filename(conf, solver), "time")
 
             with open(Z_path, 'r') as f:
-                z = float(f.read().strip())
+                z = f.read().strip()
+                if z != 'timeout':
+                    z = float(z)
 
             with open(time_path, 'r') as f:
                 t = float(f.read().strip())
@@ -203,13 +205,14 @@ if __name__ == '__main__':
             Z[solver] = Z_solver
             time[solver] = time_solver
 
+        ''' TODO: handle 'timeout's
         # check consistency on Z
         if not is_consistent(Z):
             print("ouch..")
-            exit()
-
+            #continue #exit()
+        '''
         # plot execution time
-        plot_fullpath = os.path.join(args.plots_dir, f'{shape}-time.pdf')
+        plot_fullpath = os.path.join(args.plots_dir, f'{shape}-time.png')
         plot_time(time,
                   output=plot_fullpath,
                   x_dim=0,

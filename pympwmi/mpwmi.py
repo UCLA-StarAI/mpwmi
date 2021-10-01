@@ -8,7 +8,6 @@ import numpy as np
 from pysmt.shortcuts import And, LE, LT, Not, Or, Real, is_sat
 from pysmt.environment import get_env, push_env
 
-#from pympwmi.message import SympyMessage as Message
 from pympwmi.message import NumMessage, SympyMessage
 from pympwmi.primal import PrimalGraph
 from pympwmi.utils import *
@@ -142,7 +141,11 @@ class MPWMI:
                                 self.tolerance, np.random.default_rng(self.seed), pysmt_env, subevidence))
 
         with Pool(processes=self.n_processes) as pool:
-            results = pool.starmap(MPWMI._message_passing, subproblems)
+            try:
+                results = pool.starmap(MPWMI._message_passing, subproblems)
+            except BrokenPipeError:
+                print("catched BrokenPipeError, aborting")
+                return
 
         for messages, ch in results:
             self.mailboxes.update(messages)
@@ -229,14 +232,13 @@ class MPWMI:
         for Z_comp in Z_components:
             Z *= self.Message.to_float(Z_comp)
 
+        '''
         if self.cache is not None:
-            # TODO: check if cache_hit index should be True or False
             print("\tHITS: {}/{} (ratio {})".format(self.cache_hit[True],
                                                     sum(self.cache_hit),
                                                     self.cache_hit[True] /
                                                     sum(self.cache_hit)))
-
-        #Z = float(Z.as_expr())
+        '''
         
         query_volumes = [self.Message.to_float(qv) for qv in query_volumes]
         return Z, query_volumes
@@ -285,7 +287,6 @@ class MPWMI:
         bottomup = nx.DiGraph(topdown).reverse()
         # pick an arbitrary topological node order in the bottom-up graph
         exec_order = [n for n in nx.topological_sort(bottomup)]
-        print("exec_order:", exec_order)
         for n in exec_order:
 
             # account for univariate bounds/potentials first
@@ -437,42 +438,56 @@ class MPWMI:
 
 
 if __name__ == '__main__':
-    from pysmt.shortcuts import *
-    from sys import argv
-    from wmipa import WMI
-
-    use_cache = bool(int(argv[1]))
-    use_symbolic = bool(int(argv[2]))
-
-    NVARS = 2
-
-
-
-    VARS = [Symbol(f'x{i}', REAL) for i in range(NVARS)]
-
-    CLAUSES = [LE(Real(0), VARS[i]) for i in range(NVARS)]
-    CLAUSES.extend([LE(VARS[i], Real(1)) for i in range(NVARS)])
-    CLAUSES.extend([LE(Plus(VARS[i], VARS[i+1]), Real(1))
-                    for i in range(NVARS-1)])# for j in range(i+1, NVARS)])
-
-
-    f = And(CLAUSES)
-    w = Times([Ite(LE(VARS[i], VARS[i+1]), Plus(VARS[i], VARS[i+1]), Real(1))
-                     for i in range(NVARS-1)])
-
-    queries = [LE(VARS[i], VARS[i+1]) for i in range(NVARS-1)] #for j in range(i+1, NVARS)]
-    
-    
-    msgtype = 'symbolic' if use_symbolic else 'numeric'
-    mpwmi = MPWMI(f, w, n_processes=3, msgtype=msgtype)
+    import argparse
+    from pywmi import Density
 
     
-    Z_mp, pq_mp = mpwmi.compute_volumes(queries=queries, cache=use_cache)
+    parser = argparse.ArgumentParser()
 
-    wmipa = WMI(f, w)
-    Z_pa, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
-    print("==================================================")
-    print(f"Z\t\t\t\t{Z_mp}\t{Z_pa}")
-    for i, q in enumerate(queries):
-        pq_pa, _ = wmipa.computeWMI(q, mode=WMI.MODE_PA)
-        print(f"{q}\t\t\t{pq_mp[i]}\t{pq_pa}")
+    parser.add_argument('-i', "--input", type=str, required=True,
+                        help="Path to the problem (pywmi.Density)")
+
+    parser.add_argument('--smt-solver', type=str,
+                        default='msat',
+                        help="SMT oracle (def 'msat')")
+
+    parser.add_argument('--seed', type=int,
+                        default=None,
+                        help="Random seed")
+
+    parser.add_argument('--tolerance', type=float,
+                        default=0.0,
+                        help="'tolerance' parameter (def 0.0)")
+
+    parser.add_argument('--nproc', type=int,
+                        default=1,
+                        help="Number of subprocesses (def 1)")
+
+    parser.add_argument('--type', type=str,
+                        default='numeric',
+                        help="message type 'numeric'/'symbolic' (def 'numeric')")
+
+    parser.add_argument('--cache', dest='cache',
+                        action='store_true')
+    parser.set_defaults(cache=False)
+
+
+
+    #
+    # parsing the args
+    args = parser.parse_args()
+    print(args)
+
+    density = Density.from_file(args.input)
+    solver = MPWMI(density.support,
+                   density.weight,
+                   smt_solver=args.smt_solver,
+                   seed=args.seed,
+                   tolerance=args.tolerance,
+                   n_processes=args.nproc,
+                   msgtype=args.type)
+
+    output = solver.compute_volumes(queries=density.queries,
+                                    cache=args.cache)
+    print(output)
+    

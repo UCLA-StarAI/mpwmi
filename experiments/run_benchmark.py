@@ -5,13 +5,96 @@ import time
 from itertools import product
 
 from exp_defaults import *
-
-from pywmi import Density
-
-from wmipa import WMI
+from multiprocessing import Process, Queue
+from pympwmi import MPWMI
+from oldpympwmi import oldMP2WMI, oldMPWMI
+import psutil
 from pysmt.shortcuts import Bool
-from pywmi import XsddEngine, PyXaddAlgebra
-from pympwmi import MPWMI, oldMP2WMI, oldMPWMI
+from pywmi import Density, PyXaddAlgebra, XsddEngine
+from wmipa import WMI
+
+def kill_recursive(pid):
+    proc = psutil.Process(pid)
+    for subproc in proc.children(recursive=True):
+        try:
+            subproc.kill()
+        except psutil.NoSuchProcess:
+            continue
+    try:
+        proc.kill()
+    except psutil.NoSuchProcess:
+        pass
+
+
+def wrapped_solver(solver, density, queue):
+    if solver.startswith("mpwmi-"): # should be "mpwmi-[numeric/symbolic]-NPROC"
+        solverargs = solver.split("-")[1:]
+        cache = ('cache' in solverargs)
+        msgtype = solverargs[0]
+        nproc = int(solverargs[1])
+        #print(f"using {msgtype} mpwmi with {nproc} processes")
+        t1 = time.perf_counter()
+        #print("About to start mpwmi solver")
+        mpmi = MPWMI(density.support, density.weight, smt_solver='msat',
+                     n_processes=nproc, msgtype=msgtype)
+        #print("Solver inited")
+        Z, _ = mpmi.compute_volumes(cache=cache)
+        #print("Volume computed")
+        t2 = time.perf_counter()
+
+    elif solver.startswith("oldmp2wmi-"): # should be "mpwmi-[numeric/symbolic]-NPROC"
+        solverargs = solver.split("-")[1:]
+        cache = ('cache' in solverargs)
+        nproc = int(solverargs[0])
+        #print(f"using (old) mp2wmi with {nproc} processes")
+        t1 = time.perf_counter()
+        #print("About to start mpwmi solver")
+        mpmi = oldMP2WMI(density.support, density.weight, smt_solver='msat',
+                         n_processes=nproc)
+        #print("Solver inited")
+        Z, _ = mpmi.compute_volumes(cache=cache)
+        #print("Volume computed")
+        t2 = time.perf_counter()
+
+    elif solver.startswith("oldmpwmi"): # should be "mpwmi-[numeric/symbolic]-NPROC"
+        #print(f"using oldmpwmi")
+        # mpwmi
+        t1 = time.perf_counter()
+        #print("About to start mpwmi solver")
+        mpmi = oldMPWMI(density.support, density.weight, smt_solver='msat')
+        #print("Solver inited")
+        Z, _ = mpmi.compute_volumes(cache=False)
+        #print("Volume computed")
+        t2 = time.perf_counter()
+
+    elif solver == "pa":
+        #print("using pa")
+
+        # pa
+        t1 = time.perf_counter()
+        wmipa = WMI(density.support, density.weight)
+        Z, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
+        t2 = time.perf_counter()
+
+    elif solver == "xsdd":
+        #print("using xsdd")
+
+        # xsdd
+        t1 = time.perf_counter()
+        xsdd = XsddEngine(density.domain, density.support, density.weight,
+                          factorized=False, algebra=PyXaddAlgebra(), ordered=False)
+        Z = xsdd.compute_volume(add_bounds=False)
+        t2 = time.perf_counter()
+
+    else:
+        print(f"Unrecognized solver: {solver}")
+        exit()
+
+    result = (t2 - t1, Z)
+    queue.put(result)
+
+        
+
 
 
 
@@ -36,10 +119,6 @@ if __name__ == "__main__":
                         default=DEF_SHAPE,
                         help='Shape of the dependency graph')
 
-    parser.add_argument('--smt-solver', type=str,
-                        default=DEF_SMT_SOLVER,
-                        help='Default SMT solver in pySMT (for mpwmi)')
-
     parser.add_argument('--rep', type=int, nargs='+',
                         default=list(range(DEF_REP)),
                         help='Indices of the densities')
@@ -59,6 +138,10 @@ if __name__ == "__main__":
     parser.add_argument('--degree', type=int, nargs='+',
                         default=DEF_DEGREE,
                         help='Number of max polynomial degree')
+
+    parser.add_argument('--timeout', type=int,
+                        default=DEF_TIMEOUT,
+                        help='Timeout (in seconds)')
 
     parser.add_argument('--overwrite', dest='overwrite',
                         action='store_true')
@@ -96,73 +179,36 @@ if __name__ == "__main__":
 
         density = Density.from_file(density_fullpath)
 
-        t1, t2, Z = None, None, None
+        queue = Queue()
+        proc = Process(target=wrapped_solver,
+                       args=(args.solver, density, queue,))
 
-        if args.solver.startswith("mpwmi-"): # should be "mpwmi-[numeric/symbolic]-NPROC"
-            solverargs = args.solver.split("-")[1:]
-            msgtype = solverargs[0]
-            nproc = int(solverargs[1])
-            print(f"using {msgtype} mpwmi with {nproc} processes")
-            # mpwmi
-            t1 = time.perf_counter()
-            print("About to start mpwmi solver")
-            mpmi = MPWMI(density.support, density.weight, smt_solver=args.smt_solver,
-                          n_processes=nproc, msgtype=msgtype)
-            print("Solver inited")
-            Z, _ = mpmi.compute_volumes(cache=False)
-            print("Volume computed")
-            t2 = time.perf_counter()
+        try:
+            print(f"****** STARTING PID: {proc.pid}")
+            proc.start()
+            print(f"****** WAITING FOR JOIN PID: {proc.pid}")
+            proc.join(timeout=args.timeout)
+            print(f"****** JOINED -> TERMINATING PID: {proc.pid}")
+            proc.terminate() # proc.kill() python>3.7
 
-        elif args.solver.startswith("oldmp2wmi-"): # should be "mpwmi-[numeric/symbolic]-NPROC"
-            solverargs = args.solver.split("-")[1:]
-            nproc = int(solverargs[0])
-            print(f"using (old) mp2wmi with {nproc} processes")
-            # mpwmi
-            t1 = time.perf_counter()
-            print("About to start mpwmi solver")
-            mpmi = oldMP2WMI(density.support, density.weight, smt_solver=args.smt_solver,
-                          n_processes=nproc)
-            print("Solver inited")
-            Z, _ = mpmi.compute_volumes(cache=False)
-            print("Volume computed")
-            t2 = time.perf_counter()
+            if proc.is_alive():
+                pid = proc.pid
+                print(f"Killing process {pid} and its children")
+                kill_recursive(pid)
 
-        elif args.solver.startswith("oldmpwmi"): # should be "mpwmi-[numeric/symbolic]-NPROC"
-            print(f"using oldmpwmi")
-            # mpwmi
-            t1 = time.perf_counter()
-            print("About to start mpwmi solver")
-            mpmi = oldMPWMI(density.support, density.weight, smt_solver=args.smt_solver)
-            print("Solver inited")
-            Z, _ = mpmi.compute_volumes(cache=False)
-            print("Volume computed")
-            t2 = time.perf_counter()
+            if not queue.empty():
+                t, Z = queue.get()
+                print(f"done in {t} secs")
+                print(f"Z: {Z}")
 
+            else:
+                t = args.timeout
+                Z = 'timeout'
+                print("TIMEOUT")
 
-        elif args.solver == "pa":
-            print("using pa")
-
-            # pa
-            t1 = time.perf_counter()
-            wmipa = WMI(density.support, density.weight)
-            Z, _ = wmipa.computeWMI(Bool(True), mode=WMI.MODE_PA)
-            t2 = time.perf_counter()
-
-        elif args.solver == "xsdd":
-            print("using xsdd")
-
-            # xsdd
-            t1 = time.perf_counter()
-            xsdd = XsddEngine(density.domain, density.support, density.weight,
-                              factorized=False, algebra=PyXaddAlgebra(), ordered=False)
-            Z = xsdd.compute_volume(add_bounds=False)
-            t2 = time.perf_counter()
-
-        else:
-            print(f"Unrecognized solver: {args.solver}")
-
-        print(f"done in {t2-t1} secs")
-        print(f"Z: {Z}")
+        except BrokenPipeError:
+            print("catched BrokenPipeError, aborting")
+            continue
 
         z_path = os.path.join(results_fullpath, 'Z')
         with open(z_path, 'w') as f:
@@ -171,5 +217,5 @@ if __name__ == "__main__":
 
         t_path = os.path.join(results_fullpath, 'time')
         with open(t_path, 'w') as f:
-            f.write(f"{t2-t1}\n")
+            f.write(f"{t}\n")
             print(f"time saved to {t_path}")

@@ -69,7 +69,9 @@ class PrimalGraph:
                     potentials[lvarsname] = []
                     
                 potentials[lvarsname].append((flip_negated_literals_cnf(lit), w))
-                    
+
+            print("POTENTIALS:", potentials)
+            
             variables = set(formula.get_free_variables()).union(
                 *{lit.get_free_variables() for lit in weight})
 

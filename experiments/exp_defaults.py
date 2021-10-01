@@ -37,9 +37,7 @@ DEF_WEIGHT_RATIO = 0.1
 #DEF_QUERIES_PER_DENSITY = 10
 
 ########## RUN ##########
-
-DEF_SMT_SOLVER = "msat" #(for mpwmi)
-
+DEF_TIMEOUT = 1200 # seconds
 
 ########## FOLDERS ##########
 DEF_BENCHMARK_DIR = "benchmark"

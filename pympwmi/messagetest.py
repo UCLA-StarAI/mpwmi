@@ -16,6 +16,33 @@ from sympy.polys.fields import FracElement
 from pympwmi.utils import literal_to_bounds, to_sympy
 
 
+
+from sympy import integrate, exp
+from sympy import simplify as symsimplify
+from numpy import isclose
+
+
+def convert(f, x, y):
+    sym = 0
+    for fe, p in f.items():
+        if y is not None:
+            symexp = exp(x * fe[0] + y * fe[1])
+        else:
+            symexp = exp(x * fe[0])
+
+        sympoly = 0
+        for pe, k in p.items():
+            if y is not None:
+                sympoly = sympoly + k * x**pe[0] * y**pe[1]
+            else:
+                sympoly = sympoly + k * x**pe[0]
+
+        sym = symsimplify(sym + sympoly * symexp)
+
+    return sym
+
+
+
 class Message:
 
     #ONE = One()
@@ -32,8 +59,9 @@ class Message:
         for lit, w in potentials:
             msg = []
             k, is_lower, _ = literal_to_bounds(lit)[xvar]
-            if subs is not None:               
+            if subs is not None:
                 k = simplify(substitute(k, subs))
+
             k = k.constant_value()
             f = cls.from_weight(w, xvar, yvar)
 
@@ -71,10 +99,25 @@ class Message:
             if cache is not None:  # for cache = True
                 integral = cls.integrate_cache(cache, cache_hit, l, u, p, x, y)
             else:  # for cache = False
+
                 antidrv = cls.antiderivative(p, x)
+
+                sx = symvar(x)
+                sy = symvar(y) if y is not None else None
+                anti1 = symsimplify(convert(antidrv, sx, sy))
+                anti2 = symsimplify(integrate(convert(p, sx, sy), sx))
+
+                if not anti1.equals(anti2):
+                    print("WTF antiderivative")
+                    print(anti1)
+                    print(anti2)
+                    exit()
+                else:
+                    print("antiderivative is ok")
+                    
                 lower = cls.substitute(antidrv, x, y, l)
                 upper = cls.substitute(antidrv, x, y, u)
-                integral = cls.subtract(upper, lower)
+                integral = cls.subtract(upper, lower)                
             
             res = cls.sum(res, integral)
 
@@ -562,7 +605,6 @@ class NumMessage(Message):
     
     @staticmethod
     def polypart(p, k):
-        #p2 = {pe : Fraction(pk, k) for pe,pk in p.items()}
         p2 = {}
         for pe,pk in p.items():
             try:
@@ -570,6 +612,7 @@ class NumMessage(Message):
             except TypeError:
                 p2[pe] = Fraction(Fraction(pk), k)
 
+        #p2 = {pe : Fraction(pk, k) for pe,pk in p.items()}
         pder = NumMessage.polyder(p2)
         if pder != NumMessage.ZERO():
             p3 = {e : -k for e, k in NumMessage.polypart(pder, k).items()}

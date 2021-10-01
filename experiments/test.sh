@@ -11,16 +11,17 @@ NC="1 2"
 NL="1 2"
 DEGREE="1 2"
 REPETITIONS="0 1 2 3"
+TIMEOUT="10"
 
 SOLVERS="mpwmi-numeric-1 mpwmi-symbolic-1"
 
 # GENERATE
-python3 generate_benchmark.py --benchmark-dir $BENCH_DIR  --shape $SHAPE --vars $NV --clauses $NC --lits $NL --degree $DEGREE --rep $REPETITIONS
+#python3 generate_benchmark.py --benchmark-dir $BENCH_DIR  --shape $SHAPE --vars $NV --clauses $NC --lits $NL --degree $DEGREE --rep $REPETITIONS
 
 # RUN
 for SOLVER in $SOLVERS
 do
-    python3 run_benchmark.py $SOLVER --results-dir $RES_DIR --benchmark-dir $BENCH_DIR --shape $SHAPE --vars $NV --clauses $NC --lits $NL --degree $DEGREE --rep $REPETITIONS
+    python3 run_benchmark.py $SOLVER --results-dir $RES_DIR --benchmark-dir $BENCH_DIR --shape $SHAPE --vars $NV --clauses $NC --lits $NL --degree $DEGREE --rep $REPETITIONS --timeout $TIMEOUT
 done
 
 # PLOT
